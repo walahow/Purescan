@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" fill="#18181b"/>
+  <!-- Safe-zone centered icon for maskable PWA icons -->
+  <path d="M128 192V128H192" stroke="#ffffff" stroke-width="16" stroke-linecap="square"/>
+  <path d="M320 128H384V192" stroke="#ffffff" stroke-width="16" stroke-linecap="square"/>
+  <path d="M128 320V384H192" stroke="#ffffff" stroke-width="16" stroke-linecap="square"/>
+  <path d="M384 320V384H320" stroke="#ffffff" stroke-width="16" stroke-linecap="square"/>
+  <polygon points="196,168 292,168 324,200 324,344 196,344" fill="#ffffff"/>
+  <polygon points="292,168 324,200 292,200" fill="#d4d4d8"/>
+  <rect x="216" y="220" width="84" height="10" fill="#18181b"/>
+  <rect x="216" y="246" width="68" height="8" fill="#71717a"/>
+  <rect x="216" y="268" width="84" height="8" fill="#71717a"/>
+  <rect x="164" y="252" width="184" height="8" fill="#2eb846"/>
+</svg>

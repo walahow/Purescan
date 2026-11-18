@@ -1,0 +1,145 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --color-hyde-dark: #0a4a1c;
+  --color-hyde-primary: #2eb846;
+  --color-hyde-light: #8ee069;
+  --color-surface: #f5f5f7;
+  --color-canvas: #f0f0f2;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+    height: 100%;
+  }
+
+  body {
+    background-color: #f5f5f7;
+    color: #18181b;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overscroll-behavior-y: none;
+  }
+}
+
+/* Subtle custom scrollbars */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* HYDE Interactive Grid Trail */
+@keyframes trail-elegant {
+  0% {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  18% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  40% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.04);
+  }
+}
+
+/* HYDE Terminal Cursor Blink */
+@keyframes terminal-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+.animate-terminal-blink {
+  animation: terminal-blink 1s step-end infinite;
+}
+
+/* HYDE Camera Viewfinder Scan Bar */
+@keyframes scan-line {
+  0% {
+    top: 4%;
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.7;
+  }
+  88% {
+    opacity: 0.7;
+  }
+  100% {
+    top: 94%;
+    opacity: 0;
+  }
+}
+
+.animate-scan-line {
+  animation: scan-line 2.8s ease-in-out infinite;
+}
+
+/* HYDE Bayer Dither Pattern */
+.bayer-dither {
+  background-image: url("data:image/svg+xml,%3Csvg width='4' height='4' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0h2v2H0zM2 2h2v2H2z' fill='%2371717a' fill-opacity='0.16' fill-rule='evenodd'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+}
+
+/* Clean monochrome range slider matching HYDE */
+input[type="range"].hyde-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 2px;
+  background: #d4d4d8;
+  outline: none;
+}
+
+input[type="range"].hyde-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: #18181b;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 1px #18181b;
+  cursor: pointer;
+}
+
+input[type="range"].hyde-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 0;
+  background: #18181b;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 1px #18181b;
+  cursor: pointer;
+}
+
+/* Safe area padding helpers for notched phones */
+.pb-safe {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+.pt-safe {
+  padding-top: max(0.5rem, env(safe-area-inset-top));
+}

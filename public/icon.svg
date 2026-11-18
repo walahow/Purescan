@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" fill="#18181b"/>
+  <!-- Drafting grid hint -->
+  <path d="M96 144H416M96 368H416M144 96V416M368 96V416" stroke="#27272a" stroke-width="2"/>
+  <!-- Corner registration brackets -->
+  <path d="M96 168V96H168" stroke="#ffffff" stroke-width="18" stroke-linecap="square"/>
+  <path d="M344 96H416V168" stroke="#ffffff" stroke-width="18" stroke-linecap="square"/>
+  <path d="M96 344V416H168" stroke="#ffffff" stroke-width="18" stroke-linecap="square"/>
+  <path d="M416 344V416H344" stroke="#ffffff" stroke-width="18" stroke-linecap="square"/>
+  <!-- Document sheet with folded corner -->
+  <polygon points="184,148 300,148 340,188 340,364 184,364" fill="#ffffff"/>
+  <polygon points="300,148 340,188 300,188" fill="#d4d4d8"/>
+  <!-- Text bars -->
+  <rect x="208" y="212" width="104" height="12" fill="#18181b"/>
+  <rect x="208" y="242" width="84" height="10" fill="#71717a"/>
+  <rect x="208" y="268" width="104" height="10" fill="#71717a"/>
+  <rect x="208" y="294" width="64" height="10" fill="#a1a1aa"/>
+  <!-- Pure scan laser line -->
+  <rect x="148" y="250" width="216" height="8" fill="#2eb846"/>
+</svg>
