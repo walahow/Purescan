@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFNumber, PDFRawStream } from 'pdf-lib';
 import {
+  buildPdfFromEncodedPages,
   buildPdfFromJpegs,
   formatBytes,
+  formatSavingsPercent,
   PAGE_DIMENSIONS_PT,
   sanitizeFilename,
 } from '../exporter';
+import { packRgbaTo1Bit } from '../../imaging/monochrome';
 
 // Minimal valid 16x24 portrait and 24x16 landscape JPEG fixtures
 const PORTRAIT_JPG_B64 =
@@ -75,5 +78,66 @@ describe('PDF export utilities and pdf-lib assembly', () => {
 
   it('throws cleanly when given zero pages', async () => {
     await expect(buildPdfFromJpegs([], { pageSize: 'a4', margin: 'none' })).rejects.toThrow();
+  });
+
+  it('formats compression savings percentages cleanly', () => {
+    expect(formatSavingsPercent(1_000_000, 250_000)).toBe('−75%');
+    expect(formatSavingsPercent(1000, 955)).toBe('−4.5%');
+    expect(formatSavingsPercent(1000, 1000)).toBe('0%');
+  });
+
+  it('embeds mixed 1-bit monochrome FlateDecode and JPEG pages cleanly', async () => {
+    const portrait = fromBase64(PORTRAIT_JPG_B64);
+
+    // Odd width (123 x 180) with black horizontal text-like bars on white paper
+    const w = 123;
+    const h = 180;
+    const rgba = new Uint8ClampedArray(w * h * 4).fill(255);
+    for (let y = 20; y < 160; y += 12) {
+      for (let x = 10; x < 110; x++) {
+        const idx = (y * w + x) * 4;
+        rgba[idx] = 0;
+        rgba[idx + 1] = 0;
+        rgba[idx + 2] = 0;
+      }
+    }
+    const mono = packRgbaTo1Bit(rgba, w, h, 165);
+
+    const bytes = await buildPdfFromEncodedPages(
+      [
+        { kind: 'jpeg', bytes: portrait },
+        { kind: 'mono-flate', packedBits: mono.packedBits, width: mono.width, height: mono.height },
+      ],
+      { pageSize: 'a4', margin: 'small', title: 'Mixed Codec Scan' }
+    );
+
+    const loaded = await PDFDocument.load(bytes);
+    expect(loaded.getPageCount()).toBe(2);
+
+    // Verify 1-bit DeviceGray FlateDecode Image XObject exists with exact dimensions
+    let foundMonoXObj = false;
+    for (const [, obj] of loaded.context.enumerateIndirectObjects()) {
+      if (!(obj instanceof PDFRawStream)) continue;
+      const subtype = obj.dict.lookup(PDFName.of('Subtype'));
+      if (subtype !== PDFName.of('Image')) continue;
+      const bpc = obj.dict.lookup(PDFName.of('BitsPerComponent'));
+      const cs = obj.dict.lookup(PDFName.of('ColorSpace'));
+      const filter = obj.dict.lookup(PDFName.of('Filter'));
+      const objW = obj.dict.lookup(PDFName.of('Width'));
+      const objH = obj.dict.lookup(PDFName.of('Height'));
+      if (
+        bpc instanceof PDFNumber &&
+        bpc.asNumber() === 1 &&
+        cs === PDFName.of('DeviceGray') &&
+        filter === PDFName.of('FlateDecode')
+      ) {
+        foundMonoXObj = true;
+        expect(objW instanceof PDFNumber && objW.asNumber()).toBe(w);
+        expect(objH instanceof PDFNumber && objH.asNumber()).toBe(h);
+        // Deflated 1-bit page should compress significantly smaller than raw packed bitmap
+        expect(obj.contents.byteLength).toBeLessThan(mono.packedBits.byteLength);
+      }
+    }
+    expect(foundMonoXObj).toBe(true);
   });
 });

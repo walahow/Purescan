@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { CameraView } from './components/CameraView';
+import { CompressPdfView } from './components/CompressPdfView';
 import { CropView } from './components/CropView';
 import { ExportModal } from './components/ExportModal';
 import { FilterView } from './components/FilterView';
@@ -7,7 +8,7 @@ import { WorkspaceView } from './components/WorkspaceView';
 import { ConfirmDialog } from './components/ui/ConfirmDialog';
 import { InteractiveGridBackground } from './components/ui/InteractiveGridBackground';
 import { ToastBanner, type ToastMessage } from './components/ui/ToastBanner';
-import { TopNavbar } from './components/ui/TopNavbar';
+import { TopNavbar, type AppMode } from './components/ui/TopNavbar';
 import { usePwaStatus } from './hooks/usePwaInstall';
 import { useScanWorkspace, type PendingDraft } from './hooks/useScanWorkspace';
 import { generateSampleShadowedDocument } from './imaging/sampleDoc';
@@ -37,6 +38,8 @@ export default function App() {
 
   const { canInstall, isOffline, promptInstall } = usePwaStatus();
 
+  const [appMode, setAppMode] = useState<AppMode>('scanner');
+  const [incomingPdf, setIncomingPdf] = useState<File | null>(null);
   const [screen, setScreen] = useState<ActiveScreen>('workspace');
   const [activeDraft, setActiveDraft] = useState<PendingDraft | null>(null);
   const [savingDraft, setSavingDraft] = useState(false);
@@ -73,11 +76,24 @@ export default function App() {
 
   const handleIncomingFiles = useCallback(
     async (files: File[]) => {
-      const imageFiles = files.filter((f) => !f.type || f.type.startsWith('image/'));
-      if (imageFiles.length === 0) {
-        notify('error', 'Please select valid image files (JPG, PNG, WebP).');
+      const pdfFile = files.find(
+        (f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
+      );
+      if (pdfFile) {
+        setIncomingPdf(pdfFile);
+        setAppMode('compress');
+        setScreen('workspace');
+        notify('info', `Loaded ${pdfFile.name} in Compress PDF mode.`);
         return;
       }
+
+      const imageFiles = files.filter((f) => !f.type || f.type.startsWith('image/'));
+      if (imageFiles.length === 0) {
+        notify('error', 'Please select valid image files (JPG, PNG, WebP) or a PDF to compress.');
+        return;
+      }
+
+      setAppMode('scanner');
 
       try {
         if (imageFiles.length === 1) {
@@ -228,43 +244,59 @@ export default function App() {
 
       {/* Top Sticky Frosted Navbar */}
       <TopNavbar
+        appMode={appMode}
+        onChangeMode={(mode) => {
+          setAppMode(mode);
+          setScreen('workspace');
+        }}
         pageCount={pages.length}
         isOffline={isOffline}
         canInstall={canInstall}
         onInstallApp={handleInstallApp}
-        onLoadSamplePage={() => void handleLoadSamplePage()}
+        onLoadSamplePage={() => {
+          setAppMode('scanner');
+          void handleLoadSamplePage();
+        }}
         onExportPdf={() => setExportOpen(true)}
       />
 
       {/* Toast Notifications */}
       <ToastBanner toast={toast} onDismiss={() => setToast(null)} />
 
-      {/* Primary Workspace */}
-      <WorkspaceView
-        pages={pages}
-        thumbUrls={thumbUrls}
-        documentTitle={meta.title}
-        loading={loading}
-        busyLabel={busyLabel}
-        storageWarning={storageWarning}
-        onRenameDocument={(title) => void renameDocument(title)}
-        onOpenCamera={() => setScreen('camera')}
-        onTriggerNativeCamera={() => nativeCamInputRef.current?.click()}
-        onTriggerGallery={() => galleryInputRef.current?.click()}
-        onLoadSamplePage={() => void handleLoadSamplePage()}
-        onDropFiles={(files) => void handleIncomingFiles(files)}
-        onEditFilter={handleEditPageFilter}
-        onEditCrop={handleEditPageCrop}
-        onRotatePage={(id) => void rotatePageQuick(id)}
-        onMovePage={(id, dir) => void movePage(id, dir)}
-        onDeletePage={(id) => {
-          void deletePage(id);
-          notify('info', 'Page removed.');
-        }}
-        onApplyFilterAll={(f) => void handleApplyFilterAll(f)}
-        onRequestClearAll={() => setClearConfirmOpen(true)}
-        onExportPdf={() => setExportOpen(true)}
-      />
+      {/* Primary Workspace or Client-Side PDF Compressor */}
+      {appMode === 'compress' ? (
+        <CompressPdfView
+          incomingPdf={incomingPdf}
+          onConsumeIncomingPdf={() => setIncomingPdf(null)}
+          onNotify={notify}
+        />
+      ) : (
+        <WorkspaceView
+          pages={pages}
+          thumbUrls={thumbUrls}
+          documentTitle={meta.title}
+          loading={loading}
+          busyLabel={busyLabel}
+          storageWarning={storageWarning}
+          onRenameDocument={(title) => void renameDocument(title)}
+          onOpenCamera={() => setScreen('camera')}
+          onTriggerNativeCamera={() => nativeCamInputRef.current?.click()}
+          onTriggerGallery={() => galleryInputRef.current?.click()}
+          onLoadSamplePage={() => void handleLoadSamplePage()}
+          onDropFiles={(files) => void handleIncomingFiles(files)}
+          onEditFilter={handleEditPageFilter}
+          onEditCrop={handleEditPageCrop}
+          onRotatePage={(id) => void rotatePageQuick(id)}
+          onMovePage={(id, dir) => void movePage(id, dir)}
+          onDeletePage={(id) => {
+            void deletePage(id);
+            notify('info', 'Page removed.');
+          }}
+          onApplyFilterAll={(f) => void handleApplyFilterAll(f)}
+          onRequestClearAll={() => setClearConfirmOpen(true)}
+          onExportPdf={() => setExportOpen(true)}
+        />
+      )}
 
       {/* Signature HYDE Dark Telemetry Footer Bar */}
       <footer className="hidden md:flex relative z-20 w-full bg-zinc-900 text-zinc-400 font-mono text-[9px] px-5 py-1.5 justify-between tracking-widest shrink-0">

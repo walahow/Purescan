@@ -1,3 +1,7 @@
+import { DEFAULT_ADJUSTMENTS } from '../types/scan';
+import { applyDocumentFilter } from './filters';
+import { packRgbaTo1Bit } from './monochrome';
+
 export const MAX_INGEST_DIM = 2200;
 export const PREVIEW_MAX_DIM = 900;
 export const THUMBNAIL_MAX_DIM = 400;
@@ -171,4 +175,182 @@ export async function reencodeForPdf(blob: Blob, maxDim: number, quality: number
   const resized = await ingestImageBlob(blob, maxDim, quality);
   const arrBuf = await resized.blob.arrayBuffer();
   return new Uint8Array(arrBuf);
+}
+
+/**
+ * Zero-waste JPEG encoder for PDF export:
+ * - Passes through the existing JPEG bytes untouched when already within maxDim and quality >= srcQualityHint.
+ * - Never returns a larger JPEG than the original Blob when dimensions are unchanged.
+ */
+export async function encodeBlobAsJpegSafe(
+  blob: Blob,
+  srcWidth: number,
+  srcHeight: number,
+  maxDim: number,
+  quality: number,
+  srcQualityHint = 0.88
+): Promise<{ bytes: Uint8Array; width: number; height: number }> {
+  const isJpeg = blob.type === 'image/jpeg' || blob.type === 'image/jpg';
+  const longest = Math.max(srcWidth, srcHeight);
+
+  if (isJpeg && longest > 0 && longest <= maxDim && quality >= srcQualityHint) {
+    return {
+      bytes: new Uint8Array(await blob.arrayBuffer()),
+      width: srcWidth,
+      height: srcHeight,
+    };
+  }
+
+  const resized = await ingestImageBlob(blob, maxDim, quality);
+  if (isJpeg && resized.width === srcWidth && resized.height === srcHeight && resized.blob.size >= blob.size) {
+    return {
+      bytes: new Uint8Array(await blob.arrayBuffer()),
+      width: srcWidth,
+      height: srcHeight,
+    };
+  }
+
+  return {
+    bytes: new Uint8Array(await resized.blob.arrayBuffer()),
+    width: resized.width,
+    height: resized.height,
+  };
+}
+
+/**
+ * Decodes an image Blob (downscaled to maxDim) and packs it into a PDF-ready 1-bit monochrome stream.
+ * Optionally applies Pure B&W illumination normalization first when the source still contains shadows.
+ */
+export async function encodeBlobAsMono1Bit(
+  blob: Blob,
+  maxDim: number,
+  options: { isAlreadyBw: boolean; needsShadowRemoval: boolean }
+): Promise<{ packedBits: Uint8Array; width: number; height: number }> {
+  const img = await blobToImageData(blob, maxDim);
+  let pixels = img.pixels;
+
+  if (options.needsShadowRemoval) {
+    pixels = applyDocumentFilter(pixels, img.width, img.height, 'pure-bw', DEFAULT_ADJUSTMENTS);
+  }
+
+  const packed = packRgbaTo1Bit(
+    pixels,
+    img.width,
+    img.height,
+    options.isAlreadyBw || options.needsShadowRemoval ? 165 : undefined
+  );
+
+  return {
+    packedBits: packed.packedBits,
+    width: packed.width,
+    height: packed.height,
+  };
+}
+
+/**
+ * Downscales raw RGBA pixels on an offscreen canvas and encodes to JPEG bytes.
+ * Used by Phase B (Existing PDF Compressor) for /FlateDecode image XObjects.
+ */
+export async function rgbaToScaledJpegBytes(
+  pixels: Uint8ClampedArray,
+  srcWidth: number,
+  srcHeight: number,
+  maxDim: number,
+  quality: number
+): Promise<{ bytes: Uint8Array; width: number; height: number }> {
+  const srcCanvas = document.createElement('canvas');
+  const dstCanvas = document.createElement('canvas');
+  try {
+    srcCanvas.width = srcWidth;
+    srcCanvas.height = srcHeight;
+    const srcCtx = srcCanvas.getContext('2d');
+    if (!srcCtx) throw new Error('Canvas 2D context unavailable.');
+    const safeBuffer = new Uint8ClampedArray(pixels.buffer as ArrayBuffer, pixels.byteOffset, pixels.byteLength);
+    srcCtx.putImageData(new ImageData(safeBuffer, srcWidth, srcHeight), 0, 0);
+
+    let targetW = srcWidth;
+    let targetH = srcHeight;
+    const longest = Math.max(srcWidth, srcHeight);
+    if (longest > maxDim) {
+      const s = maxDim / longest;
+      targetW = Math.max(1, Math.round(srcWidth * s));
+      targetH = Math.max(1, Math.round(srcHeight * s));
+    }
+
+    if (targetW === srcWidth && targetH === srcHeight) {
+      const blob = await canvasToBlob(srcCanvas, 'image/jpeg', quality);
+      return { bytes: new Uint8Array(await blob.arrayBuffer()), width: targetW, height: targetH };
+    }
+
+    dstCanvas.width = targetW;
+    dstCanvas.height = targetH;
+    const dstCtx = dstCanvas.getContext('2d', { alpha: false });
+    if (!dstCtx) throw new Error('Canvas 2D context unavailable.');
+    dstCtx.fillStyle = '#ffffff';
+    dstCtx.fillRect(0, 0, targetW, targetH);
+    dstCtx.imageSmoothingEnabled = true;
+    dstCtx.imageSmoothingQuality = 'high';
+    dstCtx.drawImage(srcCanvas, 0, 0, targetW, targetH);
+
+    const blob = await canvasToBlob(dstCanvas, 'image/jpeg', quality);
+    return { bytes: new Uint8Array(await blob.arrayBuffer()), width: targetW, height: targetH };
+  } finally {
+    releaseCanvas(srcCanvas);
+    releaseCanvas(dstCanvas);
+  }
+}
+
+/**
+ * Downscales raw RGBA pixels on an offscreen canvas and packs into a 1-bit monochrome stream.
+ * Optionally applies Pure B&W shadow normalization so shadowed document scans stay readable.
+ */
+export function rgbaToScaledMono1Bit(
+  pixels: Uint8ClampedArray,
+  srcWidth: number,
+  srcHeight: number,
+  maxDim: number,
+  options?: { applyShadowRemoval?: boolean }
+): { packedBits: Uint8Array; width: number; height: number } {
+  const applyShadow = options?.applyShadowRemoval ?? true;
+  const longest = Math.max(srcWidth, srcHeight);
+  if (longest <= maxDim) {
+    const clean = applyShadow
+      ? applyDocumentFilter(pixels, srcWidth, srcHeight, 'pure-bw', DEFAULT_ADJUSTMENTS)
+      : pixels;
+    const packed = packRgbaTo1Bit(clean, srcWidth, srcHeight, applyShadow ? 165 : undefined);
+    return { packedBits: packed.packedBits, width: packed.width, height: packed.height };
+  }
+
+  const s = maxDim / longest;
+  const targetW = Math.max(1, Math.round(srcWidth * s));
+  const targetH = Math.max(1, Math.round(srcHeight * s));
+
+  const srcCanvas = document.createElement('canvas');
+  const dstCanvas = document.createElement('canvas');
+  try {
+    srcCanvas.width = srcWidth;
+    srcCanvas.height = srcHeight;
+    const srcCtx = srcCanvas.getContext('2d');
+    if (!srcCtx) throw new Error('Canvas 2D context unavailable.');
+    const safeBuffer = new Uint8ClampedArray(pixels.buffer as ArrayBuffer, pixels.byteOffset, pixels.byteLength);
+    srcCtx.putImageData(new ImageData(safeBuffer, srcWidth, srcHeight), 0, 0);
+
+    dstCanvas.width = targetW;
+    dstCanvas.height = targetH;
+    const dstCtx = dstCanvas.getContext('2d', { willReadFrequently: true });
+    if (!dstCtx) throw new Error('Canvas 2D context unavailable.');
+    dstCtx.imageSmoothingEnabled = true;
+    dstCtx.imageSmoothingQuality = 'high';
+    dstCtx.drawImage(srcCanvas, 0, 0, targetW, targetH);
+
+    const resized = dstCtx.getImageData(0, 0, targetW, targetH);
+    const clean = applyShadow
+      ? applyDocumentFilter(resized.data, targetW, targetH, 'pure-bw', DEFAULT_ADJUSTMENTS)
+      : resized.data;
+    const packed = packRgbaTo1Bit(clean, targetW, targetH, applyShadow ? 165 : undefined);
+    return { packedBits: packed.packedBits, width: packed.width, height: packed.height };
+  } finally {
+    releaseCanvas(srcCanvas);
+    releaseCanvas(dstCanvas);
+  }
 }

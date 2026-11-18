@@ -89,20 +89,88 @@ export interface DocumentMeta {
 
 export type PdfPageSize = 'a4' | 'letter' | 'fit';
 export type PdfMargin = 'none' | 'small' | 'standard';
-export type PdfQuality = 'small' | 'balanced' | 'high';
+export type PdfQuality = 'ultra' | 'small' | 'balanced' | 'high';
+export type PdfCompressionMode = 'preset' | 'target-size';
+export type PdfBwEncoding = 'auto' | 'mono-1bit' | 'jpeg';
 
 export interface ExportOptions {
   filename: string;
   pageSize: PdfPageSize;
   margin: PdfMargin;
   quality: PdfQuality;
+  compressionMode: PdfCompressionMode;
+  /** Target maximum output file size in bytes (used when compressionMode === 'target-size') */
+  targetMaxBytes?: number;
+  /** 'auto': 1-bit Flate for pure-bw pages & JPEG for color/gray; 'mono-1bit': force all pages to 1-bit B&W; 'jpeg': force JPEG */
+  bwEncoding: PdfBwEncoding;
+}
+
+export interface ExportProgress {
+  current: number;
+  total: number;
+  stage?: string;
 }
 
 export interface ExportResult {
   blob: Blob;
   filename: string;
   byteSize: number;
+  sourceBytes: number;
   pageCount: number;
+  monoPageCount: number;
+  jpegPageCount: number;
+  targetMet?: boolean;
+  appliedProfileLabel: string;
+}
+
+export type PdfCompressPreset = 'ultra' | 'small' | 'balanced';
+
+export interface PdfImageSkipSummary {
+  transparency: number;
+  alreadyCompactOrSmall: number;
+  unsupportedCodec: number;
+}
+
+export interface PdfInspectionReport {
+  filename: string;
+  pageCount: number;
+  totalBytes: number;
+  totalImages: number;
+  compressibleImages: number;
+  compressibleBytes: number;
+  skippedImages: number;
+  skipReasons: PdfImageSkipSummary;
+  /** Percentage of total PDF bytes accounted for by compressible Image XObjects (0..100) */
+  imageSharePercent: number;
+}
+
+export interface PdfCompressOptions {
+  compressionMode: PdfCompressionMode;
+  preset: PdfCompressPreset;
+  targetMaxBytes?: number;
+  /** Convert compressible images to crisp 1-bit monochrome Flate streams */
+  forceMono1Bit: boolean;
+  /** Strip PDF info metadata & XMP stream */
+  stripMetadata: boolean;
+}
+
+export interface PdfCompressProgress {
+  current: number;
+  total: number;
+  stage: string;
+}
+
+export interface PdfCompressResult {
+  blob: Blob;
+  filename: string;
+  originalBytes: number;
+  compressedBytes: number;
+  pageCount: number;
+  recompressedImages: number;
+  skippedImages: number;
+  alreadyOptimal: boolean;
+  targetMet?: boolean;
+  appliedProfileLabel: string;
 }
 
 export interface WorkerProcessRequest {

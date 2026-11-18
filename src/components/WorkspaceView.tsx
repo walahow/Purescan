@@ -90,7 +90,12 @@ export function WorkspaceView({
     e.preventDefault();
     dragDepthRef.current = 0;
     setIsDraggingOver(false);
-    const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/'));
+    const files = Array.from(e.dataTransfer.files).filter(
+      (f) =>
+        f.type.startsWith('image/') ||
+        f.type === 'application/pdf' ||
+        f.name.toLowerCase().endsWith('.pdf')
+    );
     if (files.length > 0) {
       onDropFiles(files);
     }
@@ -112,7 +117,7 @@ export function WorkspaceView({
         <div className="fixed inset-4 z-50 border-2 border-dashed border-zinc-900 bg-white/90 backdrop-blur-xs flex flex-col items-center justify-center pointer-events-none">
           <Upload size={40} className="text-zinc-900 mb-3" />
           <p className="font-mono text-xs font-bold uppercase tracking-[0.25em] text-zinc-900">
-            [ RELEASE_TO_SCAN_PHOTOS ]
+            [ RELEASE_TO_SCAN_PHOTOS_OR_COMPRESS_PDF ]
           </p>
         </div>
       )}

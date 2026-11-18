@@ -13,11 +13,15 @@ The UI follows the visual design system of **HYDE (`D:\proj\HYDE`)**: sharp `rou
 - **Imaging Engine (No OpenCV.js WASM)**:
   - `src/imaging/perspective.ts` — Convex clockwise quad validation, A4/Letter/Auto output sizing, 8×8 Gaussian elimination inverse homography solver, bilinear perspective warp, and 90° pixel buffer rotation.
   - `src/imaging/filters.ts` — Border-replicated morphological closing (`dilate` → `erode` on downscaled block-max grid + 1-pass blur + p85 floor guard) for illumination estimation, per-channel/luminance illumination division, white/black stretch, subtle saturation boost, and edge-aware 3×3 unsharp mask. Presets: `pure-color` (Magic Color), `pure-bw` (anti-aliased soft-threshold B&W), `grayscale`, `original`.
+  - `src/imaging/monochrome.ts` — Pure-TS 1-bit bi-level bitmap packer (`BitsPerComponent: 1`, byte-aligned MSB-first scanlines, white right-edge padding, adaptive Otsu threshold) for compact `/FlateDecode` PDF text pages.
   - `src/workers/imageProcessor.worker.ts` + `src/imaging/workerClient.ts` — Dedicated ES Module Web Worker (**7.3 KB** compiled) using zero-copy `ArrayBuffer` transfers, with synchronous fallback if a browser blocks module workers.
-  - `src/imaging/ingest.ts` — EXIF-aware decode (`createImageBitmap` + `<img>` fallback), downscaling to `<= 2200 px` long edge to protect mobile Safari/Chrome RAM, explicit canvas release (`width = height = 0`).
-  - `src/imaging/sampleDoc.ts` — Client-side shadowed sample document generator so first-time users can test trimming & shadow removal in 1 click.
+  - `src/imaging/ingest.ts` — EXIF-aware decode (`createImageBitmap` + `<img>` fallback), downscaling to `<= 2200 px` long edge to protect mobile Safari/Chrome RAM, zero-waste JPEG passthrough + never-bloat guard, explicit canvas release (`width = height = 0`).
+  - `src/imaging/sampleDoc.ts` — Client-side shadowed sample document generator so first-time users can test trimming, shadow removal, and PDF compression in 1 click.
 - **Storage**: `src/db/storage.ts` — Native IndexedDB (`purescan-local-db`) storing original blobs, quads, filter settings, processed JPEGs, thumbnails, and active document title, with automatic in-memory fallback if private browsing blocks IndexedDB.
-- **PDF Export**: `src/pdf/exporter.ts` — Lazy-loaded `pdf-lib` (`import('pdf-lib')` only on export, keeping initial JS bundle to ~102 KB gzipped). Sequential per-page JPEG encoding + direct `/DCTDecode` embedding, A4/Letter auto portrait/landscape orientation, Fit-to-Scan mode, selectable margins & DPI quality, direct browser download, and conditional native Web Share API (`navigator.share`).
+- **PDF Export & Client-Side Compression**:
+  - `src/pdf/sizeSolver.ts` — Shared monotonic 0..100 compression ladder (`780px/Q38` → `2200px/Q88`), representative 3-item sampling for multi-page documents, and bounded binary search for Target File Size budgets.
+  - `src/pdf/exporter.ts` — Lazy-loaded `pdf-lib` (`import('pdf-lib')` only on export/compress, keeping initial JS bundle to ~115 KB gzipped). Supports mixed `/DCTDecode` JPEG + 1-bit `/DeviceGray` `/FlateDecode` pages, Presets (`Ultra`, `Compact`, `Balanced`, `High`), Target File Size mode (`200 KB`, `500 KB`, `1 MB`, `2 MB`, Custom), `Auto` / `Force 1-Bit` / `JPEG Only` B&W codec policy, A4/Letter auto-orientation, Fit-to-Scan, live before→after savings telemetry, preview tab, direct download, and conditional native Web Share API.
+  - `src/pdf/pdfPredictor.ts` & `src/pdf/pdfCompressor.ts` — 100% client-side existing-PDF compressor (`Compress PDF` navbar mode + automatic `.pdf` drag-drop routing). Walks `pdf-lib` Image XObjects in place, decodes JPEG & Flate (including TIFF-2 and PNG 10..15 predictors), protects `/SMask` transparency & CMYK/JBIG2 streams, preserves 100% selectable text/links/vectors, shows an upfront image-vs-vector structure diagnostic, supports Presets + Target Size + optional 1-bit B&W image conversion + metadata stripping, and enforces per-image & global never-bloat guards.
 
 ---
 
@@ -25,7 +29,7 @@ The UI follows the visual design system of **HYDE (`D:\proj\HYDE`)**: sharp `rou
 ```powershell
 npm install       # Install dependencies
 npm run dev       # Local Vite dev server
-npm test          # Run Vitest unit & PDF integration suites (14 tests)
+npm test          # Run Vitest unit & PDF integration suites (36 tests)
 npm run build     # TypeScript strict check (tsc -b) + Vite production build + PWA SW
 npm run preview   # Serve production dist/ locally at http://127.0.0.1:4173
 ```

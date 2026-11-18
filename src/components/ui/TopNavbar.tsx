@@ -2,14 +2,20 @@ import { useState, useRef, useEffect } from 'react';
 import {
   ArrowUpRight,
   Download,
+  FileArchive,
   FileDown,
   Info,
+  ScanLine,
   ShieldCheck,
   WifiOff,
   X,
 } from 'lucide-react';
 
+export type AppMode = 'scanner' | 'compress';
+
 interface TopNavbarProps {
+  appMode: AppMode;
+  onChangeMode: (mode: AppMode) => void;
   pageCount: number;
   isOffline: boolean;
   canInstall: boolean;
@@ -19,6 +25,8 @@ interface TopNavbarProps {
 }
 
 export function TopNavbar({
+  appMode,
+  onChangeMode,
   pageCount,
   isOffline,
   canInstall,
@@ -53,16 +61,47 @@ export function TopNavbar({
           </span>
         </div>
 
-        {/* Center: Live Client-Side Status Pill (Desktop) */}
-        <div className="hidden md:flex items-center gap-2">
-          <span className="inline-flex items-center gap-1.5 rounded-none border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-emerald-700">
+        {/* Center: Mode Switcher + Client-Side Status Pill */}
+        <div className="hidden sm:flex items-center gap-2.5">
+          <div className="inline-flex border border-zinc-300 bg-white" role="tablist" aria-label="PureScan tool mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={appMode === 'scanner'}
+              onClick={() => onChangeMode('scanner')}
+              className={`h-8 px-3 font-mono text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors cursor-pointer ${
+                appMode === 'scanner'
+                  ? 'bg-zinc-900 text-white'
+                  : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900'
+              }`}
+            >
+              <ScanLine size={12} />
+              Scanner
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={appMode === 'compress'}
+              onClick={() => onChangeMode('compress')}
+              className={`h-8 px-3 border-l border-zinc-300 font-mono text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors cursor-pointer ${
+                appMode === 'compress'
+                  ? 'bg-zinc-900 text-white'
+                  : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900'
+              }`}
+            >
+              <FileArchive size={12} />
+              Compress PDF
+            </button>
+          </div>
+
+          <span className="hidden lg:inline-flex items-center gap-1.5 rounded-none border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-emerald-700">
             <span className="h-1.5 w-1.5 bg-emerald-500" />
-            100% ON-DEVICE · ZERO ADS
+            100% ON-DEVICE
           </span>
           {isOffline && (
-            <span className="inline-flex items-center gap-1.5 rounded-none border border-amber-300 bg-amber-50 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-amber-700">
+            <span className="hidden md:inline-flex items-center gap-1.5 rounded-none border border-amber-300 bg-amber-50 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-amber-700">
               <WifiOff size={11} />
-              OFFLINE READY
+              OFFLINE
             </span>
           )}
         </div>
@@ -160,21 +199,55 @@ export function TopNavbar({
             )}
           </div>
 
-          {/* Primary Export CTA */}
-          <button
-            type="button"
-            onClick={onExportPdf}
-            disabled={pageCount === 0}
-            className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-none h-9 px-2.5 sm:px-3.5 md:px-4 font-mono text-[10px] sm:text-[11px] font-bold uppercase tracking-wider bg-zinc-900 text-white border border-zinc-900 hover:bg-zinc-800 active:bg-black transition-colors disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer shrink-0"
-          >
-            <FileDown size={14} className="shrink-0" />
-            <span className="whitespace-nowrap">Export PDF</span>
-            {pageCount > 0 && (
-              <span className="ml-0.5 px-1.5 py-0.5 bg-white/15 text-[10px]">{pageCount}</span>
-            )}
-            <ArrowUpRight size={12} className="hidden sm:inline opacity-70" />
-          </button>
+          {/* Primary Export CTA (Scanner Mode) */}
+          {appMode === 'scanner' && (
+            <button
+              type="button"
+              onClick={onExportPdf}
+              disabled={pageCount === 0}
+              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-none h-9 px-2.5 sm:px-3.5 md:px-4 font-mono text-[10px] sm:text-[11px] font-bold uppercase tracking-wider bg-zinc-900 text-white border border-zinc-900 hover:bg-zinc-800 active:bg-black transition-colors disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer shrink-0"
+            >
+              <FileDown size={14} className="shrink-0" />
+              <span className="whitespace-nowrap">Export PDF</span>
+              {pageCount > 0 && (
+                <span className="ml-0.5 px-1.5 py-0.5 bg-white/15 text-[10px]">{pageCount}</span>
+              )}
+              <ArrowUpRight size={12} className="hidden sm:inline opacity-70" />
+            </button>
+          )}
         </div>
+      </div>
+
+      {/* Mobile Compact Mode Switch Strip */}
+      <div className="sm:hidden border-t border-zinc-200/80 grid grid-cols-2 bg-white" role="tablist" aria-label="PureScan tool mode">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={appMode === 'scanner'}
+          onClick={() => onChangeMode('scanner')}
+          className={`h-9 font-mono text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+            appMode === 'scanner'
+              ? 'bg-zinc-900 text-white'
+              : 'text-zinc-600 hover:bg-zinc-50'
+          }`}
+        >
+          <ScanLine size={12} />
+          Scanner {pageCount > 0 ? `(${pageCount})` : ''}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={appMode === 'compress'}
+          onClick={() => onChangeMode('compress')}
+          className={`h-9 border-l border-zinc-200 font-mono text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+            appMode === 'compress'
+              ? 'bg-zinc-900 text-white'
+              : 'text-zinc-600 hover:bg-zinc-50'
+          }`}
+        >
+          <FileArchive size={12} />
+          Compress PDF
+        </button>
       </div>
     </nav>
   );
