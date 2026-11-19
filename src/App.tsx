@@ -46,7 +46,16 @@ export default function App() {
     pageToDraft,
   } = useScanWorkspace();
 
-  const { canInstall, isOffline, promptInstall } = usePwaStatus();
+  const {
+    canInstall,
+    isInstalled,
+    isOffline,
+    needsUpdate,
+    updateStatus,
+    promptInstall,
+    applyUpdate,
+    checkForUpdate,
+  } = usePwaStatus();
 
   const [appMode, setAppMode] = useState<AppMode>('scanner');
   const [incomingPdf, setIncomingPdf] = useState<File | null>(null);
@@ -243,7 +252,12 @@ export default function App() {
         pageCount={pages.length}
         isOffline={isOffline}
         canInstall={canInstall}
+        isInstalled={isInstalled}
+        needsUpdate={needsUpdate}
+        updateStatus={updateStatus}
         onInstallApp={handleInstallApp}
+        onApplyUpdate={() => void applyUpdate()}
+        onCheckUpdate={(silent) => void checkForUpdate(silent)}
         onLoadSamplePage={() => {
           setAppMode('scanner');
           void handleLoadSamplePage();

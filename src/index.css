@@ -155,6 +155,25 @@
   animation: diamond-explode 0.55s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+@keyframes diamond-beat {
+  0% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  48% {
+    transform: scale(2.35);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(2.35);
+    opacity: 0;
+  }
+}
+
+.animate-diamond-beat {
+  animation: diamond-beat 1.35s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
 @keyframes dither-drift {
   0% {
     background-position: 0 0;

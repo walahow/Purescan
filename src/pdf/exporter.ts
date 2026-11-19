@@ -15,10 +15,13 @@ import {
   solveCompressionLevel,
 } from './sizeSolver';
 
-// Standard PDF points (72 pt = 1 inch)
+// Standard PDF points (72 pt = 1 inch), portrait orientation (width <= height)
 export const PAGE_DIMENSIONS_PT: Record<Exclude<PdfPageSize, 'fit'>, { width: number; height: number }> = {
   a4: { width: 595.28, height: 841.89 },
+  f4: { width: 609.45, height: 935.43 }, // 215 x 330 mm
   letter: { width: 612, height: 792 },
+  legal: { width: 612, height: 1008 }, // 8.5 x 14 in
+  'id-card': { width: 153.07, height: 242.65 }, // 54 x 85.6 mm (CR80 / KTP)
 };
 
 export const MARGIN_PT: Record<PdfMargin, number> = {

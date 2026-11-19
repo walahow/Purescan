@@ -52,7 +52,7 @@ export function ExportModal({
 }: ExportModalProps) {
   const [filename, setFilename] = useState(defaultTitle);
   const [pageSize, setPageSize] = useState<PdfPageSize>('a4');
-  const [margin, setMargin] = useState<PdfMargin>('small');
+  const [margin, setMargin] = useState<PdfMargin>('none');
 
   const [compressionMode, setCompressionMode] = useState<PdfCompressionMode>('preset');
   const [quality, setQuality] = useState<PdfQuality>('balanced');
@@ -242,17 +242,20 @@ export function ExportModal({
             </p>
           </div>
 
-          {/* Page Size & Margins side-by-side on desktop */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+          {/* Page Size (matched to Camera Preview presets) & Page Margin */}
+          <div className="space-y-3.5">
             <div>
               <p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-400 mb-1.5">
                 // PAGE_SIZE
               </p>
-              <div className="grid grid-cols-3 border border-zinc-200">
+              <div className="grid grid-cols-3 sm:grid-cols-6 border border-zinc-200">
                 {(
                   [
-                    { id: 'a4', label: 'A4', sub: 'Auto' },
-                    { id: 'letter', label: 'Letter', sub: 'US' },
+                    { id: 'a4', label: 'A4', sub: '210×297' },
+                    { id: 'f4', label: 'F4', sub: '215×330' },
+                    { id: 'letter', label: 'Letter', sub: '8.5×11' },
+                    { id: 'legal', label: 'Legal', sub: '8.5×14' },
+                    { id: 'id-card', label: 'ID Card', sub: '86×54' },
                     { id: 'fit', label: 'Fit', sub: 'Exact' },
                   ] as const
                 ).map((opt, idx) => (
@@ -260,9 +263,9 @@ export function ExportModal({
                     key={opt.id}
                     type="button"
                     onClick={() => setPageSize(opt.id)}
-                    className={`py-2 px-1.5 font-mono flex flex-col items-center gap-0.5 transition-colors cursor-pointer ${
-                      idx > 0 ? 'border-l border-zinc-200' : ''
-                    } ${
+                    className={`py-2 px-1 font-mono flex flex-col items-center gap-0.5 transition-colors cursor-pointer ${
+                      idx % 3 > 0 ? 'border-l border-zinc-200' : ''
+                    } ${idx >= 3 ? 'border-t sm:border-t-0 sm:border-l border-zinc-200' : ''} ${
                       pageSize === opt.id
                         ? 'bg-zinc-900 text-white'
                         : 'bg-white text-zinc-600 hover:bg-zinc-50'

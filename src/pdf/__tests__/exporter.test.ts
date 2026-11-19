@@ -76,6 +76,25 @@ describe('PDF export utilities and pdf-lib assembly', () => {
     expect(p0.width / p0.height).toBeCloseTo(16 / 24, 3);
   });
 
+  it('supports F4, Legal, and ID Card PDF page sizes with auto-orientation', async () => {
+    const portrait = fromBase64(PORTRAIT_JPG_B64);
+    const landscape = fromBase64(LANDSCAPE_JPG_B64);
+
+    for (const size of ['f4', 'legal', 'id-card'] as const) {
+      const bytes = await buildPdfFromJpegs([{ bytes: portrait }, { bytes: landscape }], {
+        pageSize: size,
+        margin: 'none',
+      });
+      const loaded = await PDFDocument.load(bytes);
+      const p0 = loaded.getPage(0).getSize();
+      const p1 = loaded.getPage(1).getSize();
+      expect(p0.width).toBeCloseTo(PAGE_DIMENSIONS_PT[size].width, 1);
+      expect(p0.height).toBeCloseTo(PAGE_DIMENSIONS_PT[size].height, 1);
+      expect(p1.width).toBeCloseTo(PAGE_DIMENSIONS_PT[size].height, 1);
+      expect(p1.height).toBeCloseTo(PAGE_DIMENSIONS_PT[size].width, 1);
+    }
+  });
+
   it('throws cleanly when given zero pages', async () => {
     await expect(buildPdfFromJpegs([], { pageSize: 'a4', margin: 'none' })).rejects.toThrow();
   });

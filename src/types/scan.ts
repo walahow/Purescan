@@ -28,9 +28,9 @@ export interface FilterAdjustments {
 }
 
 export const DEFAULT_ADJUSTMENTS: FilterAdjustments = {
-  shadowStrength: 96,
-  contrast: 0,
-  brightness: 0,
+  shadowStrength: 100,
+  contrast: 10,
+  brightness: 5,
 };
 
 export interface FilterPresetMeta {
@@ -97,7 +97,7 @@ export interface DocumentMeta {
   updatedAt: number;
 }
 
-export type PdfPageSize = 'a4' | 'letter' | 'fit';
+export type PdfPageSize = 'a4' | 'f4' | 'letter' | 'legal' | 'id-card' | 'fit';
 export type PdfMargin = 'none' | 'small' | 'standard';
 export type PdfQuality = 'ultra' | 'small' | 'balanced' | 'high';
 export type PdfCompressionMode = 'preset' | 'target-size';

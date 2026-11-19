@@ -1,11 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
+  CheckCircle2,
   Download,
   FileArchive,
+  RefreshCw,
   ScanLine,
   ShieldCheck,
   WifiOff,
 } from 'lucide-react';
+import type { PwaUpdateStatus } from '../../hooks/usePwaInstall';
 
 export type AppMode = 'scanner' | 'compress';
 
@@ -15,11 +18,26 @@ interface TopNavbarProps {
   pageCount: number;
   isOffline: boolean;
   canInstall: boolean;
+  isInstalled: boolean;
+  needsUpdate: boolean;
+  updateStatus: PwaUpdateStatus;
   onInstallApp: () => void;
+  onApplyUpdate: () => void;
+  onCheckUpdate: (silent?: boolean) => void;
   onLoadSamplePage: () => void;
 }
 
-function HydeDiamondNodeIcon({ open, beatTick }: { open: boolean; beatTick: number }) {
+const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.1.0';
+
+function HydeDiamondNodeIcon({
+  open,
+  beatTick,
+  needsUpdate,
+}: {
+  open: boolean;
+  beatTick: number;
+  needsUpdate: boolean;
+}) {
   return (
     <span className="relative inline-flex items-center justify-center">
       {/* Stationary base diamond node icon */}
@@ -52,8 +70,8 @@ function HydeDiamondNodeIcon({ open, beatTick }: { open: boolean; beatTick: numb
         {/* Subtle stepped outer diamond halo */}
         <polygon
           points="12,3 21,12 12,21 3,12"
-          fill="currentColor"
-          fillOpacity={open ? '0.24' : '0.12'}
+          fill={needsUpdate ? '#2eb846' : 'currentColor'}
+          fillOpacity={open ? '0.24' : needsUpdate ? '0.22' : '0.12'}
         />
         {/* Crisp hollow diamond border */}
         <polygon
@@ -65,9 +83,28 @@ function HydeDiamondNodeIcon({ open, beatTick }: { open: boolean; beatTick: numb
         {/* Center reticle dot */}
         <polygon
           points="12,10.5 13.5,12 12,13.5 10.5,12"
-          fill="currentColor"
+          fill={needsUpdate && !open ? '#2eb846' : 'currentColor'}
         />
       </svg>
+
+      {/* Continuous beating pulse while an app update is waiting */}
+      {needsUpdate && (
+        <svg
+          width="22"
+          height="22"
+          viewBox="0 0 24 24"
+          fill="none"
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 text-[#2eb846] animate-diamond-beat"
+        >
+          <polygon
+            points="12,5.2 18.8,12 12,18.8 5.2,12"
+            stroke="currentColor"
+            strokeWidth="1.85"
+            fill="none"
+          />
+        </svg>
+      )}
 
       {/* Exploding overlay diamond outline on click */}
       {beatTick > 0 && (
@@ -98,7 +135,12 @@ export function TopNavbar({
   pageCount,
   isOffline,
   canInstall,
+  isInstalled,
+  needsUpdate,
+  updateStatus,
   onInstallApp,
+  onApplyUpdate,
+  onCheckUpdate,
   onLoadSamplePage,
 }: TopNavbarProps) {
   const [infoOpen, setInfoOpen] = useState(false);
@@ -219,23 +261,33 @@ export function TopNavbar({
             </span>
           )}
 
-          {/* Privacy / Info Node Popover */}
+          {/* Privacy / Info / Update Node Popover */}
           <div className="relative" ref={popoverWrapperRef}>
             <button
               type="button"
               onClick={() => {
-                setInfoOpen((v) => !v);
+                const nextOpen = !infoOpen;
+                setInfoOpen(nextOpen);
                 setBeatTick((t) => t + 1);
+                if (nextOpen && !needsUpdate) {
+                  onCheckUpdate(true);
+                }
               }}
-              aria-label="How PureScan works"
+              aria-label={needsUpdate ? 'Update available — App info' : 'How PureScan works'}
               aria-expanded={infoOpen}
-              className={`flex items-center justify-center h-9 w-9 rounded-none border transition-colors cursor-pointer ${
+              className={`relative flex items-center justify-center h-9 w-9 rounded-none border transition-colors cursor-pointer ${
                 infoOpen
                   ? 'bg-zinc-900 text-white border-zinc-900'
+                  : needsUpdate
+                  ? 'bg-white text-zinc-900 border-[#2eb846] hover:bg-zinc-900 hover:text-white hover:border-zinc-900'
                   : 'bg-white text-zinc-800 border-zinc-200 hover:bg-zinc-900 hover:text-white hover:border-zinc-900'
               }`}
             >
-              <HydeDiamondNodeIcon open={infoOpen} beatTick={beatTick} />
+              <HydeDiamondNodeIcon
+                open={infoOpen}
+                beatTick={beatTick}
+                needsUpdate={needsUpdate}
+              />
             </button>
 
             {infoOpen && (
@@ -263,6 +315,13 @@ export function TopNavbar({
                 </p>
                 <div className="space-y-1.5 border-t border-zinc-100 pt-2.5 font-mono text-[10px] text-zinc-500">
                   <div className="flex justify-between">
+                    <span>VERSION</span>
+                    <span className="font-bold text-zinc-900">
+                      v{APP_VERSION}
+                      {needsUpdate && <span className="ml-1.5 text-[#229638]">· NEW</span>}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
                     <span>SERVER_UPLOAD</span>
                     <span className="font-bold text-zinc-900">NONE (0 KB)</span>
                   </div>
@@ -272,7 +331,9 @@ export function TopNavbar({
                   </div>
                   <div className="flex justify-between">
                     <span>OFFLINE</span>
-                    <span className="font-bold text-zinc-900">PWA READY</span>
+                    <span className="font-bold text-zinc-900">
+                      {isInstalled ? 'INSTALLED' : 'PWA READY'}
+                    </span>
                   </div>
                 </div>
                 <button
@@ -285,7 +346,19 @@ export function TopNavbar({
                 >
                   Load Sample Page
                 </button>
-                {canInstall && (
+                {needsUpdate ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInfoOpen(false);
+                      onApplyUpdate();
+                    }}
+                    className="mt-2.5 w-full h-9 rounded-none bg-[#2eb846] text-white font-mono text-[10px] font-bold uppercase tracking-widest flex items-center justify-center gap-1.5 hover:bg-[#259b3b] transition-colors cursor-pointer"
+                  >
+                    <RefreshCw size={13} />
+                    Update App
+                  </button>
+                ) : canInstall ? (
                   <button
                     type="button"
                     onClick={() => {
@@ -296,6 +369,35 @@ export function TopNavbar({
                   >
                     <Download size={13} />
                     Install App
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={updateStatus === 'checking'}
+                    onClick={() => onCheckUpdate(false)}
+                    className="mt-2.5 w-full h-9 rounded-none border border-zinc-300 bg-white text-zinc-900 font-mono text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 hover:bg-zinc-900 hover:text-white hover:border-zinc-900 disabled:opacity-60 transition-colors cursor-pointer"
+                  >
+                    {updateStatus === 'checking' ? (
+                      <>
+                        <RefreshCw size={12} className="animate-spin" />
+                        Checking Update...
+                      </>
+                    ) : updateStatus === 'up-to-date' ? (
+                      <>
+                        <CheckCircle2 size={13} className="text-[#229638]" />
+                        Up to Date (v{APP_VERSION})
+                      </>
+                    ) : updateStatus === 'offline' ? (
+                      <>
+                        <WifiOff size={12} />
+                        Offline
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw size={12} />
+                        Check Update
+                      </>
+                    )}
                   </button>
                 )}
               </div>
