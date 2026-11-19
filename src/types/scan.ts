@@ -196,6 +196,12 @@ export interface DocumentDetectionResult {
   detected: boolean;
 }
 
+export interface DetectDocumentOptions {
+  fallbackQuad?: Quad;
+  hintQuad?: Quad;
+  workingMaxDim?: number;
+}
+
 export interface CameraCaptureResult {
   blob: Blob;
   fallbackQuad?: Quad;

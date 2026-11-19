@@ -305,12 +305,13 @@ export function CameraView({
     const canvas = document.createElement('canvas');
     let timerId: number | null = null;
     let active = true;
+    let missedFrames = 0;
 
     const tick = () => {
       if (!active) return;
       const video = videoRef.current;
       if (video && video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= 2) {
-        const targetMax = 280;
+        const targetMax = 320;
         const vw = video.videoWidth;
         const vh = video.videoHeight;
         const scale = Math.min(1, targetMax / Math.max(vw, vh));
@@ -323,6 +324,8 @@ export function CameraView({
         }
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         if (ctx) {
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'medium';
           ctx.drawImage(video, 0, 0, w, h);
           const img = ctx.getImageData(0, 0, w, h);
           const sharp = computeSharpnessScore(img.data, w, h);
@@ -334,14 +337,22 @@ export function CameraView({
             guideIdRef.current,
             guideOrientationRef.current
           );
-          const det = detectDocumentQuad(img.data, w, h, guideFallback);
+          const det = detectDocumentQuad(img.data, w, h, {
+            fallbackQuad: guideFallback,
+            hintQuad: liveQuadRef.current ?? guideFallback,
+            workingMaxDim: 320,
+          });
           if (det.detected) {
+            missedFrames = 0;
             const smoothed = smoothQuad(liveQuadRef.current, det.quad, 0.36);
             liveQuadRef.current = smoothed;
             setLiveQuad(smoothed);
           } else {
-            liveQuadRef.current = null;
-            setLiveQuad(null);
+            missedFrames++;
+            if (missedFrames >= 3) {
+              liveQuadRef.current = null;
+              setLiveQuad(null);
+            }
           }
         }
       }

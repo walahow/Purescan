@@ -175,13 +175,12 @@ export function useScanWorkspace() {
       setBusyLabel('Detecting document edges...');
       try {
         const ingested = await ingestImageBlob(fileOrBlob, MAX_INGEST_DIM, 0.95);
-        const probe = await blobToImageData(ingested.blob, 320);
-        const detection = detectDocumentQuad(
-          probe.pixels,
-          probe.width,
-          probe.height,
-          options?.fallbackQuad
-        );
+        const probe = await blobToImageData(ingested.blob, 400);
+        const detection = detectDocumentQuad(probe.pixels, probe.width, probe.height, {
+          fallbackQuad: options?.fallbackQuad,
+          hintQuad: options?.fallbackQuad,
+          workingMaxDim: 400,
+        });
         const sharpness = computeSharpnessScore(probe.pixels, probe.width, probe.height);
 
         return {
@@ -290,13 +289,12 @@ export function useScanWorkspace() {
           const aspectMode = item instanceof Blob ? 'auto' : (item.suggestedAspectMode ?? 'auto');
 
           const ingested = await ingestImageBlob(rawBlob, MAX_INGEST_DIM, 0.95);
-          const probe = await blobToImageData(ingested.blob, 320);
-          const detection = detectDocumentQuad(
-            probe.pixels,
-            probe.width,
-            probe.height,
-            fallbackQuad
-          );
+          const probe = await blobToImageData(ingested.blob, 400);
+          const detection = detectDocumentQuad(probe.pixels, probe.width, probe.height, {
+            fallbackQuad,
+            hintQuad: fallbackQuad,
+            workingMaxDim: 400,
+          });
           const quad = detection.quad;
           const adjustments = { ...DEFAULT_ADJUSTMENTS };
           const rendered = await renderPageOutputs({

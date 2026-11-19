@@ -270,7 +270,7 @@ export function CropView({
 
   const handleAutoDetect = () => {
     if (!imgEl) return;
-    const targetMax = 320;
+    const targetMax = 400;
     const scale = Math.min(1, targetMax / Math.max(imgEl.naturalWidth, imgEl.naturalHeight));
     const w = Math.max(32, Math.round(imgEl.naturalWidth * scale));
     const h = Math.max(32, Math.round(imgEl.naturalHeight * scale));
@@ -280,9 +280,15 @@ export function CropView({
     try {
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (!ctx) return;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(imgEl, 0, 0, w, h);
       const data = ctx.getImageData(0, 0, w, h);
-      const res = detectDocumentQuad(data.data, w, h, fallbackQuad ?? createDefaultQuad(0.05));
+      const res = detectDocumentQuad(data.data, w, h, {
+        fallbackQuad: fallbackQuad ?? createDefaultQuad(0.05),
+        hintQuad: fallbackQuad,
+        workingMaxDim: 400,
+      });
       setQuad(res.quad);
       setQuadSource(res.detected ? 'auto' : fallbackQuad ? 'guide' : 'manual');
     } finally {
