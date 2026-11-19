@@ -219,17 +219,6 @@ export function TopNavbar({
             </span>
           )}
 
-          {canInstall && (
-            <button
-              type="button"
-              onClick={onInstallApp}
-              className="hidden sm:inline-flex items-center gap-1.5 rounded-none border border-zinc-200 bg-white px-3 h-9 font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-700 hover:bg-zinc-900 hover:text-white hover:border-zinc-900 transition-colors cursor-pointer"
-            >
-              <Download size={13} />
-              Install App
-            </button>
-          )}
-
           {/* Privacy / Info Node Popover */}
           <div className="relative" ref={popoverWrapperRef}>
             <button
