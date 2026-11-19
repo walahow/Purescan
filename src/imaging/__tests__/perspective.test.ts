@@ -4,7 +4,10 @@ import {
   computeTargetSize,
   createDefaultQuad,
   createFullQuad,
+  F4_RATIO,
+  ID_CARD_RATIO,
   isConvexQuad,
+  LEGAL_RATIO,
   rotateImageBuffer,
   solveHomography,
   warpPerspective,
@@ -66,6 +69,15 @@ describe('perspective geometry & homography warp', () => {
     const a4Landscape = computeTargetSize(quad, 1600, 1000, 'a4', 2200);
     expect(a4Landscape.width).toBe(1600);
     expect(a4Landscape.height).toBeCloseTo(1600 * A4_RATIO, 0);
+
+    const f4Portrait = computeTargetSize(quad, 1000, 1500, 'f4', 2200);
+    expect(f4Portrait.width).toBeCloseTo(1500 * F4_RATIO, 0);
+
+    const legalPortrait = computeTargetSize(quad, 1000, 1500, 'legal', 2200);
+    expect(legalPortrait.width).toBeCloseTo(1500 * LEGAL_RATIO, 0);
+
+    const idCardLandscape = computeTargetSize(quad, 1600, 1000, 'id-card', 2200);
+    expect(idCardLandscape.height).toBeCloseTo(1600 * ID_CARD_RATIO, 0);
   });
 
   it('solves exact inverse homography mapping destination corners back to source quad', () => {

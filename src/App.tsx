@@ -129,6 +129,7 @@ export default function App() {
       const draft = await prepareSingleDraft(capture.blob, {
         fromCamera: true,
         fallbackQuad: capture.fallbackQuad,
+        suggestedAspectMode: capture.suggestedAspectMode,
       });
       setActiveDraft(draft);
       setScreen('crop');
@@ -146,6 +147,7 @@ export default function App() {
         const draft = await prepareSingleDraft(captures[0].blob, {
           fromCamera: true,
           fallbackQuad: captures[0].fallbackQuad,
+          suggestedAspectMode: captures[0].suggestedAspectMode,
         });
         setActiveDraft(draft);
         setScreen('crop');

@@ -1,20 +1,121 @@
-import type { DocumentDetectionResult, Point, Quad } from '../types/scan';
-import { A4_RATIO, clampPoint, createDefaultQuad, isConvexQuad } from './perspective';
+import type {
+  AspectMode,
+  CameraGuideId,
+  DocumentDetectionResult,
+  GuideOrientation,
+  Point,
+  Quad,
+} from '../types/scan';
+import {
+  A4_RATIO,
+  clampPoint,
+  createDefaultQuad,
+  F4_RATIO,
+  ID_CARD_RATIO,
+  isConvexQuad,
+  LEGAL_RATIO,
+  LETTER_RATIO,
+} from './perspective';
+
+export interface CameraGuidePreset {
+  id: CameraGuideId;
+  label: string;
+  dimensionsLabel: string;
+  shortToLong: number | null;
+  defaultOrientation: GuideOrientation;
+  fillRatio: number;
+  cropAspectMode: AspectMode;
+}
+
+export const CAMERA_GUIDE_PRESETS: CameraGuidePreset[] = [
+  {
+    id: 'a4',
+    label: 'A4',
+    dimensionsLabel: '210×297',
+    shortToLong: A4_RATIO,
+    defaultOrientation: 'auto',
+    fillRatio: 0.84,
+    cropAspectMode: 'auto',
+  },
+  {
+    id: 'f4',
+    label: 'F4',
+    dimensionsLabel: '215×330',
+    shortToLong: F4_RATIO,
+    defaultOrientation: 'auto',
+    fillRatio: 0.84,
+    cropAspectMode: 'f4',
+  },
+  {
+    id: 'letter',
+    label: 'Letter',
+    dimensionsLabel: '8.5×11',
+    shortToLong: LETTER_RATIO,
+    defaultOrientation: 'auto',
+    fillRatio: 0.84,
+    cropAspectMode: 'letter',
+  },
+  {
+    id: 'legal',
+    label: 'Legal',
+    dimensionsLabel: '8.5×14',
+    shortToLong: LEGAL_RATIO,
+    defaultOrientation: 'auto',
+    fillRatio: 0.84,
+    cropAspectMode: 'legal',
+  },
+  {
+    id: 'id-card',
+    label: 'ID Card',
+    dimensionsLabel: '86×54',
+    shortToLong: ID_CARD_RATIO,
+    defaultOrientation: 'landscape',
+    fillRatio: 0.78,
+    cropAspectMode: 'id-card',
+  },
+  {
+    id: 'free',
+    label: 'Free',
+    dimensionsLabel: 'FULL',
+    shortToLong: null,
+    defaultOrientation: 'auto',
+    fillRatio: 0.92,
+    cropAspectMode: 'auto',
+  },
+];
 
 /**
- * Computes a mathematically exact A4 (210:297 portrait, 297:210 landscape) normalized quad
- * centered within a frame of dimensions (frameWidth x frameHeight).
+ * Computes an exact normalized guide quad centered within a frame of (frameWidth x frameHeight)
+ * for any supported document preset (A4, F4, Letter, Legal, ID Card, or Free).
  */
-export function computeA4GuideQuad(
+export function computeDocumentGuideQuad(
   frameWidth: number,
   frameHeight: number,
-  fillRatio = 0.84
+  guideId: CameraGuideId = 'a4',
+  orientation: GuideOrientation = 'auto',
+  fillRatioOverride?: number
 ): Quad {
   const safeW = Math.max(1, frameWidth);
   const safeH = Math.max(1, frameHeight);
-  const ratio = Math.max(0.4, Math.min(0.96, fillRatio));
+  const preset = CAMERA_GUIDE_PRESETS.find((g) => g.id === guideId) ?? CAMERA_GUIDE_PRESETS[0];
 
-  const targetAspect = safeH >= safeW ? A4_RATIO : 1 / A4_RATIO;
+  if (preset.shortToLong === null) {
+    return createDefaultQuad(0.04);
+  }
+
+  const ratio = Math.max(0.4, Math.min(0.96, fillRatioOverride ?? preset.fillRatio));
+  const resolvedOrientation =
+    orientation === 'auto'
+      ? preset.defaultOrientation === 'auto'
+        ? safeH >= safeW
+          ? 'portrait'
+          : 'landscape'
+        : preset.defaultOrientation
+      : orientation;
+
+  const targetAspect =
+    resolvedOrientation === 'portrait' ? preset.shortToLong : 1 / preset.shortToLong;
+
   const maxW = safeW * ratio;
   const maxH = safeH * ratio;
 
@@ -37,6 +138,18 @@ export function computeA4GuideQuad(
     { x: 0.5 + halfW, y: 0.5 + halfH },
     { x: 0.5 - halfW, y: 0.5 + halfH },
   ];
+}
+
+/**
+ * Computes a mathematically exact A4 (210:297 portrait, 297:210 landscape) normalized quad
+ * centered within a frame of dimensions (frameWidth x frameHeight).
+ */
+export function computeA4GuideQuad(
+  frameWidth: number,
+  frameHeight: number,
+  fillRatio = 0.84
+): Quad {
+  return computeDocumentGuideQuad(frameWidth, frameHeight, 'a4', 'auto', fillRatio);
 }
 
 /**

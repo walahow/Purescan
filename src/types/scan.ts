@@ -10,9 +10,13 @@ export type Quad = [Point, Point, Point, Point];
 
 export type Rotation = 0 | 90 | 180 | 270;
 
-export type FilterPreset = 'pure-color' | 'pure-bw' | 'grayscale' | 'original';
+export type FilterPreset = 'pure-color' | 'no-shadow' | 'pure-bw' | 'grayscale' | 'original';
 
-export type AspectMode = 'auto' | 'a4' | 'letter';
+export type AspectMode = 'auto' | 'a4' | 'letter' | 'f4' | 'legal' | 'id-card' | 'square';
+
+export type CameraGuideId = 'a4' | 'f4' | 'letter' | 'legal' | 'id-card' | 'free';
+
+export type GuideOrientation = 'auto' | 'portrait' | 'landscape';
 
 export interface FilterAdjustments {
   /** Background illumination removal strength (0..100) */
@@ -39,9 +43,15 @@ export interface FilterPresetMeta {
 export const FILTER_PRESETS: FilterPresetMeta[] = [
   {
     id: 'pure-color',
-    label: 'Pure Color',
-    code: 'PURE_CLR',
-    description: 'Removes shadows & yellow cast while keeping ink and stamps vivid',
+    label: 'Magic Color',
+    code: 'MAGIC_CLR',
+    description: 'Ajaib — Pure white paper, razor-sharp ink & vivid colors',
+  },
+  {
+    id: 'no-shadow',
+    label: 'No Shadow',
+    code: 'NO_SHDW',
+    description: 'Tanpa Bayangan — Erases shadows while keeping natural tones & photos',
   },
   {
     id: 'pure-bw',
@@ -189,6 +199,7 @@ export interface DocumentDetectionResult {
 export interface CameraCaptureResult {
   blob: Blob;
   fallbackQuad?: Quad;
+  suggestedAspectMode?: AspectMode;
 }
 
 export interface WorkerProcessRequest {

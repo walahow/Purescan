@@ -307,16 +307,20 @@ export function FilterView({
                 </span>
               </div>
 
-              <div className="grid grid-cols-4 md:grid-cols-2 border border-zinc-200">
+              <div className="flex overflow-x-auto scrollbar-hide md:grid md:grid-cols-2 border border-zinc-200">
                 {FILTER_PRESETS.map((preset, idx) => {
                   const active = filter === preset.id;
+                  const isLastSpanDesktop =
+                    FILTER_PRESETS.length % 2 === 1 && idx === FILTER_PRESETS.length - 1;
                   return (
                     <button
                       key={preset.id}
                       type="button"
                       onClick={() => setFilter(preset.id)}
-                      className={`py-2.5 px-2 md:py-3 md:px-3 text-center md:text-left transition-colors flex flex-col items-center md:items-start gap-0.5 cursor-pointer ${
-                        idx % 2 === 1 ? 'md:border-l border-zinc-200' : ''
+                      className={`shrink-0 min-w-[90px] md:min-w-0 py-2.5 px-2.5 md:py-3 md:px-3 text-center md:text-left transition-colors flex flex-col items-center md:items-start gap-0.5 cursor-pointer ${
+                        isLastSpanDesktop ? 'md:col-span-2' : ''
+                      } ${
+                        !isLastSpanDesktop && idx % 2 === 1 ? 'md:border-l border-zinc-200' : ''
                       } ${idx >= 2 ? 'md:border-t border-zinc-200' : ''} ${
                         idx > 0 ? 'border-l md:border-l-0 border-zinc-200' : ''
                       } ${

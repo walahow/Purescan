@@ -2,9 +2,9 @@ import { DEFAULT_ADJUSTMENTS } from '../types/scan';
 import { applyDocumentFilter } from './filters';
 import { packRgbaTo1Bit } from './monochrome';
 
-export const MAX_INGEST_DIM = 3200;
-export const MAX_OUTPUT_DIM = 2400;
-export const PREVIEW_MAX_DIM = 900;
+export const MAX_INGEST_DIM = 4096;
+export const MAX_OUTPUT_DIM = 3000;
+export const PREVIEW_MAX_DIM = 1400;
 export const THUMBNAIL_MAX_DIM = 400;
 
 function releaseCanvas(canvas: HTMLCanvasElement): void {
@@ -74,7 +74,7 @@ async function decodeBlobToSource(
 export async function ingestImageBlob(
   blob: Blob,
   maxDim = MAX_INGEST_DIM,
-  quality = 0.94
+  quality = 0.95
 ): Promise<{ blob: Blob; width: number; height: number }> {
   const decoded = await decodeBlobToSource(blob);
   const canvas = document.createElement('canvas');

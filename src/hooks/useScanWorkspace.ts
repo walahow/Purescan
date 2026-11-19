@@ -79,7 +79,7 @@ async function renderPageOutputs(params: {
     highQualityWarp: true,
   });
 
-  const processedBlob = await rgbaToJpegBlob(out.pixels, out.width, out.height, 0.92);
+  const processedBlob = await rgbaToJpegBlob(out.pixels, out.width, out.height, 0.94);
   const thumbnailBlob = await createThumbnailBlob(processedBlob);
   return {
     processedBlob,
@@ -170,11 +170,11 @@ export function useScanWorkspace() {
   const prepareSingleDraft = useCallback(
     async (
       fileOrBlob: Blob,
-      options?: { fromCamera?: boolean; fallbackQuad?: Quad }
+      options?: { fromCamera?: boolean; fallbackQuad?: Quad; suggestedAspectMode?: AspectMode }
     ): Promise<PendingDraft> => {
       setBusyLabel('Detecting document edges...');
       try {
-        const ingested = await ingestImageBlob(fileOrBlob, MAX_INGEST_DIM, 0.94);
+        const ingested = await ingestImageBlob(fileOrBlob, MAX_INGEST_DIM, 0.95);
         const probe = await blobToImageData(ingested.blob, 320);
         const detection = detectDocumentQuad(
           probe.pixels,
@@ -190,7 +190,7 @@ export function useScanWorkspace() {
           originalWidth: ingested.width,
           originalHeight: ingested.height,
           quad: detection.quad,
-          aspectMode: 'auto',
+          aspectMode: options?.suggestedAspectMode ?? 'auto',
           rotation: 0,
           filter: 'pure-color',
           adjustments: { ...DEFAULT_ADJUSTMENTS },
@@ -274,7 +274,7 @@ export function useScanWorkspace() {
    */
   const addBatchBlobs = useCallback(
     async (
-      items: Array<Blob | { blob: Blob; fallbackQuad?: Quad }>,
+      items: Array<Blob | { blob: Blob; fallbackQuad?: Quad; suggestedAspectMode?: AspectMode }>,
       defaultFilter: FilterPreset = 'pure-color'
     ): Promise<number> => {
       if (items.length === 0) return 0;
@@ -287,8 +287,9 @@ export function useScanWorkspace() {
           const item = items[i];
           const rawBlob = item instanceof Blob ? item : item.blob;
           const fallbackQuad = item instanceof Blob ? undefined : item.fallbackQuad;
+          const aspectMode = item instanceof Blob ? 'auto' : (item.suggestedAspectMode ?? 'auto');
 
-          const ingested = await ingestImageBlob(rawBlob, MAX_INGEST_DIM, 0.94);
+          const ingested = await ingestImageBlob(rawBlob, MAX_INGEST_DIM, 0.95);
           const probe = await blobToImageData(ingested.blob, 320);
           const detection = detectDocumentQuad(
             probe.pixels,
@@ -301,7 +302,7 @@ export function useScanWorkspace() {
           const rendered = await renderPageOutputs({
             originalBlob: ingested.blob,
             quad,
-            aspectMode: 'auto',
+            aspectMode,
             rotation: 0,
             filter: defaultFilter,
             adjustments,
@@ -315,7 +316,7 @@ export function useScanWorkspace() {
             originalWidth: ingested.width,
             originalHeight: ingested.height,
             quad,
-            aspectMode: 'auto',
+            aspectMode,
             rotation: 0,
             filter: defaultFilter,
             adjustments,

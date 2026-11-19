@@ -568,16 +568,19 @@ export function CropView({
                   [
                     { id: 'auto', label: 'Auto', sub: 'Natural' },
                     { id: 'a4', label: 'A4', sub: '210×297' },
+                    { id: 'f4', label: 'F4', sub: '215×330' },
                     { id: 'letter', label: 'Letter', sub: '8.5×11' },
+                    { id: 'legal', label: 'Legal', sub: '8.5×14' },
+                    { id: 'id-card', label: 'ID Card', sub: '86×54' },
                   ] as const
                 ).map((opt, idx) => (
                   <button
                     key={opt.id}
                     type="button"
                     onClick={() => setAspectMode(opt.id)}
-                    className={`py-2.5 px-2 font-mono transition-colors flex flex-col items-center gap-0.5 cursor-pointer ${
-                      idx > 0 ? 'border-l border-zinc-200' : ''
-                    } ${
+                    className={`py-2 px-1.5 font-mono transition-colors flex flex-col items-center gap-0.5 cursor-pointer ${
+                      idx % 3 > 0 ? 'border-l border-zinc-200' : ''
+                    } ${idx >= 3 ? 'border-t border-zinc-200' : ''} ${
                       aspectMode === opt.id
                         ? 'bg-zinc-900 text-white'
                         : 'bg-white text-zinc-600 hover:bg-zinc-50'

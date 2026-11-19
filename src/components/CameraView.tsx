@@ -6,14 +6,27 @@ import {
   FlashlightOff,
   ImagePlus,
   Layers,
+  RectangleHorizontal,
+  RectangleVertical,
   RefreshCw,
   Smartphone,
   X,
 } from 'lucide-react';
-import { computeA4GuideQuad, detectDocumentQuad, smoothQuad } from '../imaging/documentDetector';
+import {
+  CAMERA_GUIDE_PRESETS,
+  computeDocumentGuideQuad,
+  detectDocumentQuad,
+  smoothQuad,
+} from '../imaging/documentDetector';
 import { cropBlobToAspectRatio } from '../imaging/ingest';
 import { computeSharpnessScore } from '../imaging/sharpness';
-import type { CameraCaptureResult, Quad, SharpnessStatus } from '../types/scan';
+import type {
+  CameraCaptureResult,
+  CameraGuideId,
+  GuideOrientation,
+  Quad,
+  SharpnessStatus,
+} from '../types/scan';
 
 interface CameraViewProps {
   onSingleCapture: (capture: CameraCaptureResult) => void;
@@ -75,8 +88,13 @@ function getPreferredVideoConstraints(
   return [
     {
       facingMode: { ideal: facing },
-      width: { ideal: 3840 },
-      height: { ideal: 2880 },
+      width: { ideal: 4096 },
+      height: { ideal: 3072 },
+    },
+    {
+      facingMode: { ideal: facing },
+      width: { ideal: 2560 },
+      height: { ideal: 1920 },
     },
     {
       facingMode: { ideal: facing },
@@ -104,6 +122,13 @@ export function CameraView({
 
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [mode, setMode] = useState<CaptureMode>('single');
+  const [guideId, setGuideId] = useState<CameraGuideId>('a4');
+  const [guideOrientation, setGuideOrientation] = useState<GuideOrientation>('auto');
+  const guideIdRef = useRef<CameraGuideId>(guideId);
+  const guideOrientationRef = useRef<GuideOrientation>(guideOrientation);
+  guideIdRef.current = guideId;
+  guideOrientationRef.current = guideOrientation;
+
   const [cameraReady, setCameraReady] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [torchSupported, setTorchSupported] = useState(false);
@@ -303,8 +328,13 @@ export function CameraView({
           const sharp = computeSharpnessScore(img.data, w, h);
           setSharpnessStatus(sharp.status);
 
-          const a4Fallback = computeA4GuideQuad(vw, vh, 0.84);
-          const det = detectDocumentQuad(img.data, w, h, a4Fallback);
+          const guideFallback = computeDocumentGuideQuad(
+            vw,
+            vh,
+            guideIdRef.current,
+            guideOrientationRef.current
+          );
+          const det = detectDocumentQuad(img.data, w, h, guideFallback);
           if (det.detected) {
             const smoothed = smoothQuad(liveQuadRef.current, det.quad, 0.36);
             liveQuadRef.current = smoothed;
@@ -401,7 +431,16 @@ export function CameraView({
     }
 
     const previewAspect = video.videoWidth / video.videoHeight;
-    const fallbackQuad = computeA4GuideQuad(video.videoWidth, video.videoHeight, 0.84);
+    const currentGuideId = guideIdRef.current;
+    const currentPreset =
+      CAMERA_GUIDE_PRESETS.find((g) => g.id === currentGuideId) ?? CAMERA_GUIDE_PRESETS[0];
+    const fallbackQuad = computeDocumentGuideQuad(
+      video.videoWidth,
+      video.videoHeight,
+      currentGuideId,
+      guideOrientationRef.current
+    );
+    const suggestedAspectMode = currentPreset.cropAspectMode;
 
     const stream = streamRef.current;
     const track = stream?.getVideoTracks()[0];
@@ -424,8 +463,23 @@ export function CameraView({
               imageHeight?: number;
               fillLightMode?: 'auto' | 'off' | 'flash';
             } = {};
-            if (pCaps.imageWidth?.max) settings.imageWidth = Math.min(4096, pCaps.imageWidth.max);
-            if (pCaps.imageHeight?.max) settings.imageHeight = Math.min(4096, pCaps.imageHeight.max);
+            const maxW = pCaps.imageWidth?.max;
+            const maxH = pCaps.imageHeight?.max;
+            if (maxW && maxH) {
+              const longest = Math.max(maxW, maxH);
+              const cap = 4608; // Keep native sensor aspect ratio (e.g. 4000x3000 or 4608x3456)
+              if (longest > cap) {
+                const scale = cap / longest;
+                settings.imageWidth = Math.round(maxW * scale);
+                settings.imageHeight = Math.round(maxH * scale);
+              } else {
+                settings.imageWidth = maxW;
+                settings.imageHeight = maxH;
+              }
+            } else {
+              if (maxW) settings.imageWidth = Math.min(4608, maxW);
+              if (maxH) settings.imageHeight = Math.min(4608, maxH);
+            }
             if (Array.isArray(pCaps.fillLightMode)) {
               if (torchOn && pCaps.fillLightMode.includes('flash')) settings.fillLightMode = 'flash';
               else if (pCaps.fillLightMode.includes('off')) settings.fillLightMode = 'off';
@@ -443,7 +497,7 @@ export function CameraView({
         if (photoBlob && photoBlob.size > 0) {
           // Ensure captured photo matches the exact live preview framing 1:1
           const syncedBlob = await cropBlobToAspectRatio(photoBlob, previewAspect, 0.95);
-          return { blob: syncedBlob, fallbackQuad };
+          return { blob: syncedBlob, fallbackQuad, suggestedAspectMode };
         }
       } catch {
         // Fall through to multi-frame sharpest burst capture
@@ -469,10 +523,10 @@ export function CameraView({
     let bestScore = -1;
 
     try {
-      const frameCount = 4;
+      const frameCount = 5;
       for (let i = 0; i < frameCount; i++) {
         if (i > 0) {
-          await new Promise<void>((resolve) => window.setTimeout(resolve, 45));
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 35));
         }
 
         let score = 0;
@@ -489,7 +543,7 @@ export function CameraView({
             canvas.toBlob(
               (b) => (b ? resolve(b) : reject(new Error('Failed to capture camera frame.'))),
               'image/jpeg',
-              0.95
+              0.96
             );
           });
         }
@@ -502,7 +556,7 @@ export function CameraView({
     }
 
     if (!bestBlob) throw new Error('Failed to capture camera frame.');
-    return { blob: bestBlob, fallbackQuad };
+    return { blob: bestBlob, fallbackQuad, suggestedAspectMode };
   };
 
   const handleShutter = async () => {
@@ -559,17 +613,38 @@ export function CameraView({
     onClose();
   };
 
-  // Exact A4 (210:297) guide coordinates inside the rendered video rectangle
-  const a4Norm = videoRect
-    ? computeA4GuideQuad(videoRect.videoWidth, videoRect.videoHeight, 0.84)
+  const activeGuidePreset =
+    CAMERA_GUIDE_PRESETS.find((g) => g.id === guideId) ?? CAMERA_GUIDE_PRESETS[0];
+
+  const effectiveOrientation: 'portrait' | 'landscape' =
+    guideOrientation === 'auto'
+      ? activeGuidePreset.defaultOrientation === 'auto'
+        ? videoRect && videoRect.videoHeight >= videoRect.videoWidth
+          ? 'portrait'
+          : 'landscape'
+        : activeGuidePreset.defaultOrientation
+      : guideOrientation;
+
+  const toggleGuideOrientation = () => {
+    setGuideOrientation(effectiveOrientation === 'portrait' ? 'landscape' : 'portrait');
+  };
+
+  // Exact document guide coordinates inside the rendered video rectangle
+  const guideNorm = videoRect
+    ? computeDocumentGuideQuad(
+        videoRect.videoWidth,
+        videoRect.videoHeight,
+        guideId,
+        guideOrientation
+      )
     : null;
-  const a4Px =
-    videoRect && a4Norm
+  const guidePx =
+    videoRect && guideNorm
       ? {
-          left: a4Norm[0].x * videoRect.width,
-          top: a4Norm[0].y * videoRect.height,
-          width: (a4Norm[1].x - a4Norm[0].x) * videoRect.width,
-          height: (a4Norm[3].y - a4Norm[0].y) * videoRect.height,
+          left: guideNorm[0].x * videoRect.width,
+          top: guideNorm[0].y * videoRect.height,
+          width: (guideNorm[1].x - guideNorm[0].x) * videoRect.width,
+          height: (guideNorm[3].y - guideNorm[0].y) * videoRect.height,
         }
       : null;
 
@@ -701,8 +776,8 @@ export function CameraView({
               className="h-full w-full object-contain"
             />
 
-            {/* Exact Video-Anchored A4 (210:297) Guide + Live Detected Quad Overlay */}
-            {videoRect && a4Px && (
+            {/* Exact Video-Anchored Document Guide + Live Detected Quad Overlay */}
+            {videoRect && guidePx && (
               <div
                 style={{
                   left: videoRect.left,
@@ -718,32 +793,32 @@ export function CameraView({
                   className="absolute inset-0"
                 >
                   <defs>
-                    <mask id="camera-a4-mask">
+                    <mask id="camera-doc-mask">
                       <rect width={videoRect.width} height={videoRect.height} fill="white" />
                       <rect
-                        x={a4Px.left}
-                        y={a4Px.top}
-                        width={a4Px.width}
-                        height={a4Px.height}
+                        x={guidePx.left}
+                        y={guidePx.top}
+                        width={guidePx.width}
+                        height={guidePx.height}
                         fill="black"
                       />
                     </mask>
                   </defs>
 
-                  {/* Dim outside exact A4 guide frame */}
+                  {/* Dim outside active document guide frame */}
                   <rect
                     width={videoRect.width}
                     height={videoRect.height}
-                    fill="rgba(9, 9, 11, 0.36)"
-                    mask="url(#camera-a4-mask)"
+                    fill={guideId === 'free' ? 'rgba(9, 9, 11, 0.16)' : 'rgba(9, 9, 11, 0.36)'}
+                    mask="url(#camera-doc-mask)"
                   />
 
-                  {/* Exact A4 boundary hairline + subtle rule-of-thirds */}
+                  {/* Exact guide boundary hairline */}
                   <rect
-                    x={a4Px.left}
-                    y={a4Px.top}
-                    width={a4Px.width}
-                    height={a4Px.height}
+                    x={guidePx.left}
+                    y={guidePx.top}
+                    width={guidePx.width}
+                    height={guidePx.height}
                     fill="none"
                     stroke="rgba(255,255,255,0.42)"
                     strokeWidth="1"
@@ -761,13 +836,13 @@ export function CameraView({
                   )}
                 </svg>
 
-                {/* Crisp HYDE Registration Brackets on exact A4 corners */}
+                {/* Crisp HYDE Registration Brackets on exact guide corners */}
                 <div
                   style={{
-                    left: a4Px.left,
-                    top: a4Px.top,
-                    width: a4Px.width,
-                    height: a4Px.height,
+                    left: guidePx.left,
+                    top: guidePx.top,
+                    width: guidePx.width,
+                    height: guidePx.height,
                   }}
                   className="absolute"
                 >
@@ -779,7 +854,7 @@ export function CameraView({
                   <div className="absolute inset-x-2 h-px bg-white/75 shadow-[0_0_10px_rgba(255,255,255,0.85)] animate-scan-line" />
 
                   <div className="absolute top-2 left-2 bg-zinc-950/75 px-2 py-0.5 font-mono text-[9px] font-bold tracking-widest uppercase text-zinc-200">
-                    A4 · 210×297
+                    {activeGuidePreset.label} · {activeGuidePreset.dimensionsLabel}
                   </div>
                 </div>
 
@@ -807,7 +882,7 @@ export function CameraView({
                       ? 'DOC_LOCKED'
                       : mode === 'batch'
                       ? `BATCH · ${batchCaptures.length}`
-                      : 'ALIGN A4'}
+                      : `ALIGN ${activeGuidePreset.label.toUpperCase()}`}
                   </span>
                 </div>
               </div>
@@ -832,6 +907,53 @@ export function CameraView({
           </>
         )}
       </div>
+
+      {/* Document Frame Preview Selector Strip */}
+      {!errorMsg && (
+        <div className="border-t border-zinc-800/80 bg-zinc-950/95 px-3 py-2 z-20">
+          <div className="mx-auto max-w-xl flex items-center gap-1.5 overflow-x-auto scrollbar-hide">
+            {CAMERA_GUIDE_PRESETS.map((preset) => {
+              const active = guideId === preset.id;
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => {
+                    setGuideId(preset.id);
+                    setGuideOrientation('auto');
+                  }}
+                  className={`shrink-0 h-7 px-2.5 border font-mono text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer ${
+                    active
+                      ? 'bg-white text-zinc-950 border-white'
+                      : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-white hover:border-zinc-600'
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              );
+            })}
+
+            {guideId !== 'free' && (
+              <button
+                type="button"
+                onClick={toggleGuideOrientation}
+                aria-label="Flip document frame orientation"
+                title={`Guide orientation: ${effectiveOrientation}`}
+                className="ml-auto shrink-0 h-7 px-2 border border-zinc-800 bg-zinc-900 text-zinc-300 hover:text-white hover:border-zinc-600 font-mono text-[10px] uppercase tracking-wider flex items-center gap-1 cursor-pointer"
+              >
+                {effectiveOrientation === 'portrait' ? (
+                  <RectangleVertical size={12} />
+                ) : (
+                  <RectangleHorizontal size={12} />
+                )}
+                <span className="hidden sm:inline">
+                  {effectiveOrientation === 'portrait' ? 'Portrait' : 'Landscape'}
+                </span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Bottom Shutter Control Dock */}
       <div className="border-t border-zinc-800 bg-zinc-950 px-5 py-4 pb-safe z-20">

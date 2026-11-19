@@ -2,6 +2,19 @@ import type { AspectMode, Point, Quad, Rotation } from '../types/scan';
 
 export const A4_RATIO = 210 / 297; // ~0.70707
 export const LETTER_RATIO = 8.5 / 11; // ~0.77273
+export const F4_RATIO = 215 / 330; // ~0.65152 (Indonesian Folio / F4)
+export const LEGAL_RATIO = 8.5 / 14; // ~0.60714
+export const ID_CARD_RATIO = 54 / 85.6; // ~0.63084 (CR80 / KTP / KTM)
+export const SQUARE_RATIO = 1;
+
+export const ASPECT_SHORT_TO_LONG: Partial<Record<AspectMode, number>> = {
+  a4: A4_RATIO,
+  letter: LETTER_RATIO,
+  f4: F4_RATIO,
+  legal: LEGAL_RATIO,
+  'id-card': ID_CARD_RATIO,
+  square: SQUARE_RATIO,
+};
 
 /** Default slightly-inset quad so corner handles stay away from mobile edge-swipe zones */
 export function createDefaultQuad(inset = 0.05): Quad {
@@ -55,7 +68,7 @@ export function isConvexQuad(quad: Quad, minArea = 0.005): boolean {
 
 /**
  * Computes destination output dimensions for a warped quad, optionally locking
- * to A4 or Letter proportions while preserving portrait vs landscape orientation.
+ * to standard paper/card proportions while preserving portrait vs landscape orientation.
  */
 export function computeTargetSize(
   quad: Quad,
@@ -74,8 +87,8 @@ export function computeTargetSize(
   let outW = Math.max(widthTop, widthBottom, 32);
   let outH = Math.max(heightLeft, heightRight, 32);
 
-  if (aspectMode === 'a4' || aspectMode === 'letter') {
-    const shortToLong = aspectMode === 'a4' ? A4_RATIO : LETTER_RATIO;
+  const shortToLong = ASPECT_SHORT_TO_LONG[aspectMode];
+  if (shortToLong !== undefined) {
     if (outH >= outW) {
       // Portrait
       outW = outH * shortToLong;

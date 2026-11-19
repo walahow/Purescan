@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { computeA4GuideQuad, detectDocumentQuad } from '../documentDetector';
-import { A4_RATIO, createDefaultQuad } from '../perspective';
+import {
+  computeA4GuideQuad,
+  computeDocumentGuideQuad,
+  detectDocumentQuad,
+} from '../documentDetector';
+import {
+  A4_RATIO,
+  createDefaultQuad,
+  F4_RATIO,
+  ID_CARD_RATIO,
+  LEGAL_RATIO,
+  LETTER_RATIO,
+} from '../perspective';
 import type { Point, Quad } from '../../types/scan';
 
 function pointInQuad(x: number, y: number, quad: Quad): boolean {
@@ -93,6 +104,39 @@ describe('documentDetector', () => {
     const lw = (landscape[1].x - landscape[0].x) * 1920;
     const lh = (landscape[3].y - landscape[0].y) * 1080;
     expect(lh / lw).toBeCloseTo(A4_RATIO, 3);
+  });
+
+  it('computes F4, Letter, Legal, ID Card (horizontal default), and Free guide quads accurately', () => {
+    const fw = 1080;
+    const fh = 1440;
+
+    const measure = (q: Quad) => ({
+      w: (q[1].x - q[0].x) * fw,
+      h: (q[3].y - q[0].y) * fh,
+    });
+
+    const f4 = measure(computeDocumentGuideQuad(fw, fh, 'f4', 'auto'));
+    expect(f4.w / f4.h).toBeCloseTo(F4_RATIO, 3);
+
+    const letter = measure(computeDocumentGuideQuad(fw, fh, 'letter', 'auto'));
+    expect(letter.w / letter.h).toBeCloseTo(LETTER_RATIO, 3);
+
+    const legal = measure(computeDocumentGuideQuad(fw, fh, 'legal', 'auto'));
+    expect(legal.w / legal.h).toBeCloseTo(LEGAL_RATIO, 3);
+
+    // ID Card defaults to landscape even in portrait camera frames
+    const idLandscape = measure(computeDocumentGuideQuad(fw, fh, 'id-card', 'auto'));
+    expect(idLandscape.w).toBeGreaterThan(idLandscape.h);
+    expect(idLandscape.h / idLandscape.w).toBeCloseTo(ID_CARD_RATIO, 3);
+
+    // Flipping orientation to portrait swaps to vertical ID card ratio
+    const idPortrait = measure(computeDocumentGuideQuad(fw, fh, 'id-card', 'portrait'));
+    expect(idPortrait.h).toBeGreaterThan(idPortrait.w);
+    expect(idPortrait.w / idPortrait.h).toBeCloseTo(ID_CARD_RATIO, 3);
+
+    // Free returns subtle 4% inset full-frame guide
+    const free = computeDocumentGuideQuad(fw, fh, 'free', 'auto');
+    expect(free).toEqual(createDefaultQuad(0.04));
   });
 
   it('detects an axis-aligned paper sheet on a desk within 3% corner error', () => {

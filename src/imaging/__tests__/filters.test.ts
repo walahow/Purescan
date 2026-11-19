@@ -113,6 +113,26 @@ describe('document shadow-removal & pure filters', () => {
     expect(shadowRed.r - shadowRed.b).toBeGreaterThan(90);
   });
 
+  it('no-shadow (Tanpa Bayangan) removes harsh diagonal shadow while preserving natural midtones and colors', () => {
+    const out = applyDocumentFilter(doc.pixels, doc.width, doc.height, 'no-shadow', DEFAULT_ADJUSTMENTS);
+
+    const cleanLitPaper = meanRgbInBox(out, doc.width, 60, 62, 100, 74);
+    const cleanShadowPaper = meanRgbInBox(out, doc.width, 280, 480, 340, 496);
+
+    expect(cleanLitPaper.lum).toBeGreaterThan(230);
+    expect(cleanShadowPaper.lum).toBeGreaterThan(215);
+    expect(Math.abs(cleanLitPaper.lum - cleanShadowPaper.lum)).toBeLessThan(22);
+
+    const shadowText = meanRgbInBox(out, doc.width, 272, 448, 282, 452);
+    expect(shadowText.lum).toBeLessThan(75);
+
+    const shadowBlue = meanRgbInBox(out, doc.width, 275, 437, 325, 442);
+    expect(shadowBlue.b - shadowBlue.r).toBeGreaterThan(80);
+
+    const shadowRed = meanRgbInBox(out, doc.width, 298, 350, 302, 353);
+    expect(shadowRed.r - shadowRed.b).toBeGreaterThan(75);
+  });
+
   it('pure-bw outputs pure grayscale with clean white paper and crisp black text in both zones', () => {
     const out = applyDocumentFilter(doc.pixels, doc.width, doc.height, 'pure-bw', DEFAULT_ADJUSTMENTS);
 
