@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Camera,
   Check,
@@ -7,27 +7,86 @@ import {
   ImagePlus,
   Layers,
   RefreshCw,
+  Smartphone,
   X,
 } from 'lucide-react';
+import { computeA4GuideQuad, detectDocumentQuad, smoothQuad } from '../imaging/documentDetector';
+import { cropBlobToAspectRatio } from '../imaging/ingest';
+import { computeSharpnessScore } from '../imaging/sharpness';
+import type { CameraCaptureResult, Quad, SharpnessStatus } from '../types/scan';
 
 interface CameraViewProps {
-  onSingleCapture: (blob: Blob) => void;
-  onBatchComplete: (blobs: Blob[]) => void;
+  onSingleCapture: (capture: CameraCaptureResult) => void;
+  onBatchComplete: (captures: CameraCaptureResult[]) => void;
   onFallbackGallery: () => void;
   onClose: () => void;
 }
 
 type CaptureMode = 'single' | 'batch';
 
-type MediaTrackWithTorch = MediaStreamTrack & {
-  getCapabilities?: () => MediaTrackCapabilities & { torch?: boolean };
+interface VideoRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  videoWidth: number;
+  videoHeight: number;
+}
+
+interface ExtendedCapabilities extends MediaTrackCapabilities {
+  torch?: boolean;
+  focusMode?: string[];
+  exposureMode?: string[];
+  pointsOfInterest?: unknown;
+}
+
+interface ExtendedConstraintSet {
+  torch?: boolean;
+  focusMode?: string;
+  exposureMode?: string;
+  pointsOfInterest?: Array<{ x: number; y: number }>;
+}
+
+type ExtendedTrack = MediaStreamTrack & {
+  getCapabilities?: () => ExtendedCapabilities;
   applyConstraints: (
-    constraints: MediaTrackConstraints & { advanced?: Array<{ torch?: boolean }> }
+    constraints: MediaTrackConstraints & { advanced?: ExtendedConstraintSet[] }
   ) => Promise<void>;
 };
 
+interface PhotoCapabilitiesLike {
+  imageWidth?: { min?: number; max?: number; step?: number };
+  imageHeight?: { min?: number; max?: number; step?: number };
+  fillLightMode?: string[];
+}
+
 interface ImageCaptureLike {
-  takePhoto: () => Promise<Blob>;
+  takePhoto: (settings?: {
+    imageWidth?: number;
+    imageHeight?: number;
+    fillLightMode?: 'auto' | 'off' | 'flash';
+  }) => Promise<Blob>;
+  getPhotoCapabilities?: () => Promise<PhotoCapabilitiesLike>;
+}
+
+function getPreferredVideoConstraints(
+  facing: 'environment' | 'user'
+): MediaTrackConstraints[] {
+  return [
+    {
+      facingMode: { ideal: facing },
+      width: { ideal: 3840 },
+      height: { ideal: 2880 },
+    },
+    {
+      facingMode: { ideal: facing },
+      width: { ideal: 1920 },
+      height: { ideal: 1440 },
+    },
+    {
+      facingMode: { ideal: facing },
+    },
+  ];
 }
 
 export function CameraView({
@@ -37,7 +96,12 @@ export function CameraView({
   onClose,
 }: CameraViewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const nativeCamInputRef = useRef<HTMLInputElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const focusResetTimerRef = useRef<number | null>(null);
+  const focusReticleTimerRef = useRef<number | null>(null);
+
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [mode, setMode] = useState<CaptureMode>('single');
   const [cameraReady, setCameraReady] = useState(false);
@@ -47,10 +111,20 @@ export function CameraView({
   const [shutterFlash, setShutterFlash] = useState(false);
   const [capturing, setCapturing] = useState(false);
 
-  const [batchBlobs, setBatchBlobs] = useState<Blob[]>([]);
+  const [videoRect, setVideoRect] = useState<VideoRect | null>(null);
+  const [liveQuad, setLiveQuad] = useState<Quad | null>(null);
+  const liveQuadRef = useRef<Quad | null>(null);
+  const [sharpnessStatus, setSharpnessStatus] = useState<SharpnessStatus>('fair');
+  const [focusReticle, setFocusReticle] = useState<{ x: number; y: number } | null>(null);
+
+  const [batchCaptures, setBatchCaptures] = useState<CameraCaptureResult[]>([]);
   const [lastThumbUrl, setLastThumbUrl] = useState<string | null>(null);
 
   const stopStream = useCallback(() => {
+    if (focusResetTimerRef.current) {
+      window.clearTimeout(focusResetTimerRef.current);
+      focusResetTimerRef.current = null;
+    }
     if (streamRef.current) {
       for (const track of streamRef.current.getTracks()) {
         track.stop();
@@ -60,12 +134,32 @@ export function CameraView({
     setCameraReady(false);
     setTorchOn(false);
     setTorchSupported(false);
+    setLiveQuad(null);
+    liveQuadRef.current = null;
+  }, []);
+
+  const recalcVideoRect = useCallback(() => {
+    const stage = stageRef.current;
+    const video = videoRef.current;
+    if (!stage || !video || video.videoWidth === 0 || video.videoHeight === 0) return;
+
+    const sr = stage.getBoundingClientRect();
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const scale = Math.min(sr.width / vw, sr.height / vh);
+    const width = vw * scale;
+    const height = vh * scale;
+    const left = (sr.width - width) / 2;
+    const top = (sr.height - height) / 2;
+
+    setVideoRect({ left, top, width, height, videoWidth: vw, videoHeight: vh });
   }, []);
 
   const startCamera = useCallback(
     async (preferredFacing: 'environment' | 'user') => {
       stopStream();
       setErrorMsg(null);
+      setVideoRect(null);
 
       if (
         typeof window !== 'undefined' &&
@@ -74,40 +168,65 @@ export function CameraView({
         window.location.hostname !== '127.0.0.1'
       ) {
         setErrorMsg(
-          'Live browser camera requires HTTPS. You can still import existing document photos below.'
+          'Live browser camera requires HTTPS. You can still use Native Cam or import photos below.'
         );
         return;
       }
 
       if (!navigator.mediaDevices?.getUserMedia) {
         setErrorMsg(
-          'Live camera streaming is not supported in this browser. Import existing photos below.'
+          'Live camera streaming is not supported in this browser. Use Native Cam or import photos below.'
         );
         return;
       }
 
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: preferredFacing },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-          },
-          audio: false,
-        });
+        let stream: MediaStream | null = null;
+        let lastErr: unknown = null;
+        for (const videoConstraints of getPreferredVideoConstraints(preferredFacing)) {
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: videoConstraints,
+              audio: false,
+            });
+            break;
+          } catch (err) {
+            lastErr = err;
+            const name = err instanceof DOMException ? err.name : '';
+            if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'NotFoundError') {
+              throw err;
+            }
+          }
+        }
+
+        if (!stream) {
+          throw lastErr ?? new Error('Unable to acquire camera stream.');
+        }
 
         streamRef.current = stream;
         const video = videoRef.current;
         if (video) {
           video.srcObject = stream;
           await video.play();
+          recalcVideoRect();
         }
 
-        const track = stream.getVideoTracks()[0] as MediaTrackWithTorch | undefined;
+        const track = stream.getVideoTracks()[0] as ExtendedTrack | undefined;
         if (track && typeof track.getCapabilities === 'function') {
           try {
-            const caps = track.getCapabilities() as MediaTrackCapabilities & { torch?: boolean };
+            const caps = track.getCapabilities() as ExtendedCapabilities;
             setTorchSupported(Boolean(caps?.torch));
+
+            const advanced: ExtendedConstraintSet[] = [];
+            if (Array.isArray(caps?.focusMode) && caps.focusMode.includes('continuous')) {
+              advanced.push({ focusMode: 'continuous' });
+            }
+            if (Array.isArray(caps?.exposureMode) && caps.exposureMode.includes('continuous')) {
+              advanced.push({ exposureMode: 'continuous' });
+            }
+            if (advanced.length > 0 && typeof track.applyConstraints === 'function') {
+              await track.applyConstraints({ advanced }).catch(() => undefined);
+            }
           } catch {
             setTorchSupported(false);
           }
@@ -117,16 +236,16 @@ export function CameraView({
         const name = err instanceof DOMException ? err.name : '';
         if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
           setErrorMsg(
-            'Camera permission was denied. Allow camera access in your browser settings, or import existing photos below.'
+            'Camera permission was denied. Allow camera access in browser settings, or use Native Cam / Import below.'
           );
         } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
           setErrorMsg('No camera detected on this device. You can import existing document photos below.');
         } else {
-          setErrorMsg('Unable to start live camera. Try importing photos below.');
+          setErrorMsg('Unable to start live camera. Try Native Cam or importing photos below.');
         }
       }
     },
-    [stopStream]
+    [recalcVideoRect, stopStream]
   );
 
   useEffect(() => {
@@ -137,13 +256,81 @@ export function CameraView({
   }, [facingMode, startCamera, stopStream]);
 
   useEffect(() => {
+    recalcVideoRect();
+    const ro = new ResizeObserver(recalcVideoRect);
+    if (stageRef.current) ro.observe(stageRef.current);
+    window.addEventListener('resize', recalcVideoRect);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', recalcVideoRect);
+    };
+  }, [recalcVideoRect]);
+
+  useEffect(() => {
     return () => {
       if (lastThumbUrl) URL.revokeObjectURL(lastThumbUrl);
+      if (focusReticleTimerRef.current) window.clearTimeout(focusReticleTimerRef.current);
     };
   }, [lastThumbUrl]);
 
+  // Live ~4 fps offscreen document quad + sharpness telemetry loop
+  useEffect(() => {
+    if (!cameraReady || capturing || errorMsg) return;
+
+    const canvas = document.createElement('canvas');
+    let timerId: number | null = null;
+    let active = true;
+
+    const tick = () => {
+      if (!active) return;
+      const video = videoRef.current;
+      if (video && video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= 2) {
+        const targetMax = 280;
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        const scale = Math.min(1, targetMax / Math.max(vw, vh));
+        const w = Math.max(48, Math.round(vw * scale));
+        const h = Math.max(48, Math.round(vh * scale));
+
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, w, h);
+          const img = ctx.getImageData(0, 0, w, h);
+          const sharp = computeSharpnessScore(img.data, w, h);
+          setSharpnessStatus(sharp.status);
+
+          const a4Fallback = computeA4GuideQuad(vw, vh, 0.84);
+          const det = detectDocumentQuad(img.data, w, h, a4Fallback);
+          if (det.detected) {
+            const smoothed = smoothQuad(liveQuadRef.current, det.quad, 0.36);
+            liveQuadRef.current = smoothed;
+            setLiveQuad(smoothed);
+          } else {
+            liveQuadRef.current = null;
+            setLiveQuad(null);
+          }
+        }
+      }
+      if (active) {
+        timerId = window.setTimeout(tick, 250);
+      }
+    };
+
+    timerId = window.setTimeout(tick, 180);
+    return () => {
+      active = false;
+      if (timerId !== null) window.clearTimeout(timerId);
+      canvas.width = 0;
+      canvas.height = 0;
+    };
+  }, [cameraReady, capturing, errorMsg]);
+
   const toggleTorch = async () => {
-    const track = streamRef.current?.getVideoTracks()[0] as MediaTrackWithTorch | undefined;
+    const track = streamRef.current?.getVideoTracks()[0] as ExtendedTrack | undefined;
     if (!track || !torchSupported) return;
     try {
       const next = !torchOn;
@@ -154,45 +341,168 @@ export function CameraView({
     }
   };
 
-  const captureFrameBlob = async (): Promise<Blob> => {
-    const stream = streamRef.current;
-    const track = stream?.getVideoTracks()[0];
+  const handleTapToFocus = async (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!cameraReady || !videoRect || !stageRef.current || capturing) return;
+    const sr = stageRef.current.getBoundingClientRect();
+    const localX = e.clientX - sr.left;
+    const localY = e.clientY - sr.top;
 
-    // Prefer ImageCapture.takePhoto() on supported Android Chrome devices for full sensor sharpness
-    const ImageCaptureCtor = (window as unknown as { ImageCapture?: new (t: MediaStreamTrack) => ImageCaptureLike })
-      .ImageCapture;
-    if (track && typeof ImageCaptureCtor === 'function') {
-      try {
-        const ic = new ImageCaptureCtor(track);
-        const blob = await ic.takePhoto();
-        if (blob && blob.size > 0) return blob;
-      } catch {
-        // Fall through cleanly to video canvas frame capture
-      }
+    // Only focus if user tapped inside the live video frame
+    if (
+      localX < videoRect.left ||
+      localX > videoRect.left + videoRect.width ||
+      localY < videoRect.top ||
+      localY > videoRect.top + videoRect.height
+    ) {
+      return;
     }
 
+    const normX = Math.max(0.05, Math.min(0.95, (localX - videoRect.left) / videoRect.width));
+    const normY = Math.max(0.05, Math.min(0.95, (localY - videoRect.top) / videoRect.height));
+
+    setFocusReticle({ x: localX, y: localY });
+    if (focusReticleTimerRef.current) window.clearTimeout(focusReticleTimerRef.current);
+    focusReticleTimerRef.current = window.setTimeout(() => setFocusReticle(null), 1100);
+
+    const track = streamRef.current?.getVideoTracks()[0] as ExtendedTrack | undefined;
+    if (!track || typeof track.getCapabilities !== 'function') return;
+
+    try {
+      const caps = track.getCapabilities() as ExtendedCapabilities;
+      const constraint: ExtendedConstraintSet = {};
+      if (caps.pointsOfInterest) {
+        constraint.pointsOfInterest = [{ x: normX, y: normY }];
+      }
+      if (Array.isArray(caps.focusMode)) {
+        if (caps.focusMode.includes('single-shot')) constraint.focusMode = 'single-shot';
+        else if (caps.focusMode.includes('continuous')) constraint.focusMode = 'continuous';
+      }
+      if (Object.keys(constraint).length > 0) {
+        await track.applyConstraints({ advanced: [constraint] });
+      }
+      if (Array.isArray(caps.focusMode) && caps.focusMode.includes('continuous')) {
+        if (focusResetTimerRef.current) window.clearTimeout(focusResetTimerRef.current);
+        focusResetTimerRef.current = window.setTimeout(() => {
+          void track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => undefined);
+        }, 1250);
+      }
+    } catch {
+      // Device ignores tap-to-focus constraints silently
+    }
+  };
+
+  /**
+   * Captures the sharpest possible still frame that matches the live preview aspect ratio 1:1.
+   */
+  const captureFrameResult = async (): Promise<CameraCaptureResult> => {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0 || video.videoHeight === 0) {
       throw new Error('Camera feed is not ready yet.');
     }
 
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Canvas unavailable.');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const previewAspect = video.videoWidth / video.videoHeight;
+    const fallbackQuad = computeA4GuideQuad(video.videoWidth, video.videoHeight, 0.84);
 
-    const blob = await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob(
-        (b) => (b ? resolve(b) : reject(new Error('Failed to capture camera frame.'))),
-        'image/jpeg',
-        0.93
-      );
-    });
-    canvas.width = 0;
-    canvas.height = 0;
-    return blob;
+    const stream = streamRef.current;
+    const track = stream?.getVideoTracks()[0];
+
+    // 1. Prefer full-sensor ImageCapture.takePhoto() when available (Android Chrome)
+    const ImageCaptureCtor = (
+      window as unknown as { ImageCapture?: new (t: MediaStreamTrack) => ImageCaptureLike }
+    ).ImageCapture;
+
+    if (track && typeof ImageCaptureCtor === 'function') {
+      try {
+        const ic = new ImageCaptureCtor(track);
+        let photoBlob: Blob | null = null;
+
+        if (typeof ic.getPhotoCapabilities === 'function') {
+          try {
+            const pCaps = await ic.getPhotoCapabilities();
+            const settings: {
+              imageWidth?: number;
+              imageHeight?: number;
+              fillLightMode?: 'auto' | 'off' | 'flash';
+            } = {};
+            if (pCaps.imageWidth?.max) settings.imageWidth = Math.min(4096, pCaps.imageWidth.max);
+            if (pCaps.imageHeight?.max) settings.imageHeight = Math.min(4096, pCaps.imageHeight.max);
+            if (Array.isArray(pCaps.fillLightMode)) {
+              if (torchOn && pCaps.fillLightMode.includes('flash')) settings.fillLightMode = 'flash';
+              else if (pCaps.fillLightMode.includes('off')) settings.fillLightMode = 'off';
+            }
+            photoBlob = await ic.takePhoto(settings);
+          } catch {
+            // Some Android drivers reject PhotoSettings — retry bare takePhoto()
+          }
+        }
+
+        if (!photoBlob) {
+          photoBlob = await ic.takePhoto();
+        }
+
+        if (photoBlob && photoBlob.size > 0) {
+          // Ensure captured photo matches the exact live preview framing 1:1
+          const syncedBlob = await cropBlobToAspectRatio(photoBlob, previewAspect, 0.95);
+          return { blob: syncedBlob, fallbackQuad };
+        }
+      } catch {
+        // Fall through to multi-frame sharpest burst capture
+      }
+    }
+
+    // 2. Sharpest-frame burst fallback (4 frames spaced 45ms apart — protects iOS Safari & desktop)
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const canvas = document.createElement('canvas');
+    canvas.width = vw;
+    canvas.height = vh;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) throw new Error('Canvas unavailable.');
+
+    const probeCanvas = document.createElement('canvas');
+    const pScale = Math.min(1, 280 / Math.max(vw, vh));
+    probeCanvas.width = Math.max(48, Math.round(vw * pScale));
+    probeCanvas.height = Math.max(48, Math.round(vh * pScale));
+    const pCtx = probeCanvas.getContext('2d', { willReadFrequently: true });
+
+    let bestBlob: Blob | null = null;
+    let bestScore = -1;
+
+    try {
+      const frameCount = 4;
+      for (let i = 0; i < frameCount; i++) {
+        if (i > 0) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 45));
+        }
+
+        let score = 0;
+        if (pCtx) {
+          pCtx.drawImage(video, 0, 0, probeCanvas.width, probeCanvas.height);
+          const pData = pCtx.getImageData(0, 0, probeCanvas.width, probeCanvas.height);
+          score = computeSharpnessScore(pData.data, probeCanvas.width, probeCanvas.height).score;
+        }
+
+        if (score >= bestScore || !bestBlob) {
+          bestScore = score;
+          ctx.drawImage(video, 0, 0, vw, vh);
+          bestBlob = await new Promise<Blob>((resolve, reject) => {
+            canvas.toBlob(
+              (b) => (b ? resolve(b) : reject(new Error('Failed to capture camera frame.'))),
+              'image/jpeg',
+              0.95
+            );
+          });
+        }
+      }
+    } finally {
+      probeCanvas.width = 0;
+      probeCanvas.height = 0;
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+
+    if (!bestBlob) throw new Error('Failed to capture camera frame.');
+    return { blob: bestBlob, fallbackQuad };
   };
 
   const handleShutter = async () => {
@@ -202,13 +512,13 @@ export function CameraView({
     window.setTimeout(() => setShutterFlash(false), 140);
 
     try {
-      const blob = await captureFrameBlob();
+      const result = await captureFrameResult();
       if (mode === 'single') {
         stopStream();
-        onSingleCapture(blob);
+        onSingleCapture(result);
       } else {
-        setBatchBlobs((prev) => [...prev, blob]);
-        const url = URL.createObjectURL(blob);
+        setBatchCaptures((prev) => [...prev, result]);
+        const url = URL.createObjectURL(result.blob);
         setLastThumbUrl((prev) => {
           if (prev) URL.revokeObjectURL(prev);
           return url;
@@ -221,9 +531,27 @@ export function CameraView({
     }
   };
 
+  const handleNativeCamChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    if (mode === 'single') {
+      stopStream();
+      onSingleCapture({ blob: file });
+    } else {
+      const url = URL.createObjectURL(file);
+      setBatchCaptures((prev) => [...prev, { blob: file }]);
+      setLastThumbUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return url;
+      });
+    }
+  };
+
   const handleFinishBatch = () => {
     stopStream();
-    onBatchComplete(batchBlobs);
+    onBatchComplete(batchCaptures);
   };
 
   const handleClose = () => {
@@ -231,8 +559,39 @@ export function CameraView({
     onClose();
   };
 
+  // Exact A4 (210:297) guide coordinates inside the rendered video rectangle
+  const a4Norm = videoRect
+    ? computeA4GuideQuad(videoRect.videoWidth, videoRect.videoHeight, 0.84)
+    : null;
+  const a4Px =
+    videoRect && a4Norm
+      ? {
+          left: a4Norm[0].x * videoRect.width,
+          top: a4Norm[0].y * videoRect.height,
+          width: (a4Norm[1].x - a4Norm[0].x) * videoRect.width,
+          height: (a4Norm[3].y - a4Norm[0].y) * videoRect.height,
+        }
+      : null;
+
+  const livePtsStr =
+    videoRect && liveQuad
+      ? liveQuad
+          .map((p) => `${p.x * videoRect.width},${p.y * videoRect.height}`)
+          .join(' ')
+      : null;
+
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-zinc-950 text-white select-none">
+      {/* Hidden native OS camera input (works 100% offline via device hardware ISP) */}
+      <input
+        ref={nativeCamInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={handleNativeCamChange}
+        className="hidden"
+      />
+
       {/* Top Bar */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-zinc-950/90 backdrop-blur-md pt-safe z-20">
         <button
@@ -294,8 +653,12 @@ export function CameraView({
         </div>
       </div>
 
-      {/* Viewfinder Stage */}
-      <div className="relative flex-1 overflow-hidden bg-black flex items-center justify-center">
+      {/* WYSIWYG Viewfinder Stage */}
+      <div
+        ref={stageRef}
+        onPointerDown={handleTapToFocus}
+        className="relative flex-1 overflow-hidden bg-black flex items-center justify-center"
+      >
         {errorMsg ? (
           <div className="w-full max-w-md mx-4 bg-white text-zinc-900 border border-zinc-300 shadow-[10px_10px_0px_0px_rgba(255,255,255,0.12)] p-6">
             <div className="h-1 w-full bg-zinc-900 -mt-6 -mx-6 mb-5 w-[calc(100%+3rem)]" />
@@ -303,14 +666,22 @@ export function CameraView({
               // CAMERA_UNAVAILABLE
             </p>
             <p className="text-sm text-zinc-700 leading-relaxed mb-5">{errorMsg}</p>
-            <div className="flex justify-center">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() => nativeCamInputRef.current?.click()}
+                className="h-11 px-4 bg-zinc-900 text-white font-mono text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 hover:bg-zinc-800 cursor-pointer"
+              >
+                <Smartphone size={15} />
+                Native Cam
+              </button>
               <button
                 type="button"
                 onClick={() => {
                   stopStream();
                   onFallbackGallery();
                 }}
-                className="w-full h-11 px-4 bg-zinc-900 text-white font-mono text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 hover:bg-zinc-800 cursor-pointer"
+                className="h-11 px-4 border border-zinc-300 bg-white text-zinc-900 font-mono text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 hover:bg-zinc-100 cursor-pointer"
               >
                 <ImagePlus size={15} />
                 Import Photos
@@ -319,31 +690,136 @@ export function CameraView({
           </div>
         ) : (
           <>
+            {/* object-contain ensures 100% WYSIWYG match between live preview and captured photo */}
             <video
               ref={videoRef}
               playsInline
               muted
               autoPlay
-              className="h-full w-full object-cover"
+              onLoadedMetadata={recalcVideoRect}
+              onResize={recalcVideoRect}
+              className="h-full w-full object-contain"
             />
 
-            {/* HYDE Registration Bracket Overlay */}
-            <div className="pointer-events-none absolute inset-6 sm:inset-10 md:inset-y-10 md:inset-x-auto md:aspect-[210/297] md:max-w-[75vw] mx-auto">
-              <div className="absolute inset-0 border border-white/20" />
-              <div className="absolute top-0 left-0 w-8 h-8 border-t-[3px] border-l-[3px] border-white" />
-              <div className="absolute top-0 right-0 w-8 h-8 border-t-[3px] border-r-[3px] border-white" />
-              <div className="absolute bottom-0 left-0 w-8 h-8 border-b-[3px] border-l-[3px] border-white" />
-              <div className="absolute bottom-0 right-0 w-8 h-8 border-b-[3px] border-r-[3px] border-white" />
+            {/* Exact Video-Anchored A4 (210:297) Guide + Live Detected Quad Overlay */}
+            {videoRect && a4Px && (
+              <div
+                style={{
+                  left: videoRect.left,
+                  top: videoRect.top,
+                  width: videoRect.width,
+                  height: videoRect.height,
+                }}
+                className="pointer-events-none absolute overflow-hidden"
+              >
+                <svg
+                  width={videoRect.width}
+                  height={videoRect.height}
+                  className="absolute inset-0"
+                >
+                  <defs>
+                    <mask id="camera-a4-mask">
+                      <rect width={videoRect.width} height={videoRect.height} fill="white" />
+                      <rect
+                        x={a4Px.left}
+                        y={a4Px.top}
+                        width={a4Px.width}
+                        height={a4Px.height}
+                        fill="black"
+                      />
+                    </mask>
+                  </defs>
 
-              {/* Subtle HYDE scanning beam */}
-              <div className="absolute inset-x-2 h-px bg-white/80 shadow-[0_0_12px_rgba(255,255,255,0.85)] animate-scan-line" />
+                  {/* Dim outside exact A4 guide frame */}
+                  <rect
+                    width={videoRect.width}
+                    height={videoRect.height}
+                    fill="rgba(9, 9, 11, 0.36)"
+                    mask="url(#camera-a4-mask)"
+                  />
 
-              <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 whitespace-nowrap bg-zinc-950/75 px-2.5 py-1 font-mono text-[10px] tracking-widest uppercase text-zinc-300">
-                {mode === 'batch'
-                  ? `BATCH_MODE · ${batchBlobs.length} CAPTURED`
-                  : 'ALIGN DOCUMENT INSIDE FRAME'}
+                  {/* Exact A4 boundary hairline + subtle rule-of-thirds */}
+                  <rect
+                    x={a4Px.left}
+                    y={a4Px.top}
+                    width={a4Px.width}
+                    height={a4Px.height}
+                    fill="none"
+                    stroke="rgba(255,255,255,0.42)"
+                    strokeWidth="1"
+                    strokeDasharray="6 4"
+                  />
+
+                  {/* Live auto-detected document polygon */}
+                  {livePtsStr && (
+                    <polygon
+                      points={livePtsStr}
+                      fill="rgba(46, 184, 70, 0.10)"
+                      stroke="#2eb846"
+                      strokeWidth="2.5"
+                    />
+                  )}
+                </svg>
+
+                {/* Crisp HYDE Registration Brackets on exact A4 corners */}
+                <div
+                  style={{
+                    left: a4Px.left,
+                    top: a4Px.top,
+                    width: a4Px.width,
+                    height: a4Px.height,
+                  }}
+                  className="absolute"
+                >
+                  <div className="absolute top-0 left-0 w-7 h-7 border-t-[3px] border-l-[3px] border-white" />
+                  <div className="absolute top-0 right-0 w-7 h-7 border-t-[3px] border-r-[3px] border-white" />
+                  <div className="absolute bottom-0 left-0 w-7 h-7 border-b-[3px] border-l-[3px] border-white" />
+                  <div className="absolute bottom-0 right-0 w-7 h-7 border-b-[3px] border-r-[3px] border-white" />
+
+                  <div className="absolute inset-x-2 h-px bg-white/75 shadow-[0_0_10px_rgba(255,255,255,0.85)] animate-scan-line" />
+
+                  <div className="absolute top-2 left-2 bg-zinc-950/75 px-2 py-0.5 font-mono text-[9px] font-bold tracking-widest uppercase text-zinc-200">
+                    A4 · 210×297
+                  </div>
+                </div>
+
+                {/* Live Sharpness & Lock Telemetry Pill */}
+                <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-zinc-950/80 border border-zinc-800 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider whitespace-nowrap">
+                  <span
+                    className={`w-1.5 h-1.5 ${
+                      sharpnessStatus === 'sharp'
+                        ? 'bg-[#2eb846]'
+                        : sharpnessStatus === 'fair'
+                        ? 'bg-zinc-300'
+                        : 'bg-amber-400'
+                    }`}
+                  />
+                  <span className="text-zinc-200">
+                    {sharpnessStatus === 'sharp'
+                      ? 'SHARP'
+                      : sharpnessStatus === 'fair'
+                      ? 'TAP TO FOCUS'
+                      : 'HOLD STEADY'}
+                  </span>
+                  <span className="text-zinc-600">·</span>
+                  <span className={liveQuad ? 'text-[#2eb846] font-bold' : 'text-zinc-400'}>
+                    {liveQuad
+                      ? 'DOC_LOCKED'
+                      : mode === 'batch'
+                      ? `BATCH · ${batchCaptures.length}`
+                      : 'ALIGN A4'}
+                  </span>
+                </div>
               </div>
-            </div>
+            )}
+
+            {/* Tap-to-Focus HYDE Reticle */}
+            {focusReticle && (
+              <div
+                style={{ left: focusReticle.x, top: focusReticle.y }}
+                className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 w-14 h-14 border-2 border-[#2eb846] shadow-[0_0_12px_rgba(46,184,70,0.45)] animate-ping"
+              />
+            )}
 
             {!cameraReady && (
               <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/80 font-mono text-xs uppercase tracking-widest text-zinc-400">
@@ -360,9 +836,9 @@ export function CameraView({
       {/* Bottom Shutter Control Dock */}
       <div className="border-t border-zinc-800 bg-zinc-950 px-5 py-4 pb-safe z-20">
         <div className="mx-auto max-w-md flex items-center justify-between gap-4">
-          {/* Left slot: Gallery import OR Batch thumbnail counter */}
-          <div className="w-24 flex items-center justify-start">
-            {batchBlobs.length > 0 && lastThumbUrl ? (
+          {/* Left slot: Batch counter OR Gallery import */}
+          <div className="w-28 flex items-center justify-start gap-3">
+            {batchCaptures.length > 0 && lastThumbUrl ? (
               <div className="relative flex items-center gap-2">
                 <img
                   src={lastThumbUrl}
@@ -370,7 +846,7 @@ export function CameraView({
                   className="h-12 w-9 object-cover border border-white/60 bg-zinc-900"
                 />
                 <span className="font-mono text-xs font-bold text-white">
-                  ×{batchBlobs.length}
+                  ×{batchCaptures.length}
                 </span>
               </div>
             ) : (
@@ -382,7 +858,7 @@ export function CameraView({
                 }}
                 className="flex flex-col items-center gap-1 text-zinc-400 hover:text-white transition-colors cursor-pointer"
               >
-                <ImagePlus size={20} />
+                <ImagePlus size={19} />
                 <span className="font-mono text-[9px] uppercase tracking-wider">Import</span>
               </button>
             )}
@@ -401,16 +877,26 @@ export function CameraView({
             </span>
           </button>
 
-          {/* Right slot: Done button (Batch) */}
-          <div className="w-24 flex items-center justify-end">
-            {batchBlobs.length > 0 && (
+          {/* Right slot: Done button (Batch) OR Native OS Camera escape hatch */}
+          <div className="w-28 flex items-center justify-end">
+            {batchCaptures.length > 0 ? (
               <button
                 type="button"
                 onClick={handleFinishBatch}
                 className="h-11 px-3.5 bg-white text-zinc-950 font-mono text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5 hover:bg-zinc-200 transition-colors cursor-pointer"
               >
                 <Check size={15} strokeWidth={3} />
-                Done ({batchBlobs.length})
+                Done ({batchCaptures.length})
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => nativeCamInputRef.current?.click()}
+                title="Use phone's native camera hardware (100% offline)"
+                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+              >
+                <Smartphone size={19} />
+                <span className="font-mono text-[9px] uppercase tracking-wider">Native Cam</span>
               </button>
             )}
           </div>

@@ -349,7 +349,7 @@ export function applyDocumentFilter(
       }
     }
 
-    applyUnsharpMask(out, width, height, 0.28, 7);
+    applyUnsharpMask(out, width, height, 0.36, 7);
     return out;
   }
 
@@ -395,7 +395,7 @@ export function applyDocumentFilter(
       }
     }
 
-    applyUnsharpMask(out, width, height, 0.22, 10);
+    applyUnsharpMask(out, width, height, 0.30, 10);
     return out;
   }
 
@@ -422,5 +422,6 @@ export function applyDocumentFilter(
     }
   }
 
+  applyUnsharpMask(out, width, height, 0.24, 8);
   return out;
 }

@@ -13,7 +13,15 @@ workerSelf.onmessage = (event: MessageEvent<WorkerProcessRequest>) => {
     const target = computeTargetSize(req.quad, req.width, req.height, req.aspectMode, req.maxOutputDim);
 
     // 1. Perspective warp from 4-corner quad
-    const warped = warpPerspective(srcPixels, req.width, req.height, req.quad, target.width, target.height);
+    const warped = warpPerspective(
+      srcPixels,
+      req.width,
+      req.height,
+      req.quad,
+      target.width,
+      target.height,
+      Boolean(req.highQualityWarp)
+    );
 
     // 2. Apply document enhancement / shadow-removal filter
     const filtered = applyDocumentFilter(warped, target.width, target.height, req.filter, req.adjustments);

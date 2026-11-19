@@ -2,7 +2,8 @@ import { DEFAULT_ADJUSTMENTS } from '../types/scan';
 import { applyDocumentFilter } from './filters';
 import { packRgbaTo1Bit } from './monochrome';
 
-export const MAX_INGEST_DIM = 2200;
+export const MAX_INGEST_DIM = 3200;
+export const MAX_OUTPUT_DIM = 2400;
 export const PREVIEW_MAX_DIM = 900;
 export const THUMBNAIL_MAX_DIM = 400;
 
@@ -66,13 +67,14 @@ async function decodeBlobToSource(
 }
 
 /**
- * Downscales an incoming camera/gallery photo to a safe working resolution (<= 2200px)
- * and bakes EXIF orientation into a clean JPEG Blob. Prevents mobile Safari/Chrome RAM crashes.
+ * Downscales an incoming camera/gallery photo to a safe working resolution (<= 3200px)
+ * and bakes EXIF orientation into a clean JPEG Blob. Prevents mobile Safari/Chrome RAM crashes
+ * while preserving ~250-300 DPI detail for cropped document regions.
  */
 export async function ingestImageBlob(
   blob: Blob,
   maxDim = MAX_INGEST_DIM,
-  quality = 0.92
+  quality = 0.94
 ): Promise<{ blob: Blob; width: number; height: number }> {
   const decoded = await decodeBlobToSource(blob);
   const canvas = document.createElement('canvas');
@@ -99,6 +101,58 @@ export async function ingestImageBlob(
 
     const outBlob = await canvasToBlob(canvas, 'image/jpeg', quality);
     return { blob: outBlob, width: targetW, height: targetH };
+  } finally {
+    decoded.close();
+    releaseCanvas(canvas);
+  }
+}
+
+/**
+ * Center-crops an image Blob to match targetAspect (width / height) when its natural
+ * aspect ratio differs by > 2%, guaranteeing 1:1 WYSIWYG framing between live camera
+ * preview and high-resolution ImageCapture.takePhoto() stills.
+ */
+export async function cropBlobToAspectRatio(
+  blob: Blob,
+  targetAspect: number,
+  quality = 0.95
+): Promise<Blob> {
+  if (!Number.isFinite(targetAspect) || targetAspect <= 0) return blob;
+  const decoded = await decodeBlobToSource(blob);
+  const srcW = decoded.width;
+  const srcH = decoded.height;
+  if (srcW <= 0 || srcH <= 0) {
+    decoded.close();
+    return blob;
+  }
+
+  const srcAspect = srcW / srcH;
+  if (Math.abs(srcAspect - targetAspect) / targetAspect <= 0.02) {
+    decoded.close();
+    return blob;
+  }
+
+  const canvas = document.createElement('canvas');
+  try {
+    let sx = 0;
+    let sy = 0;
+    let cropW = srcW;
+    let cropH = srcH;
+
+    if (srcAspect > targetAspect) {
+      cropW = Math.max(1, Math.round(srcH * targetAspect));
+      sx = Math.floor((srcW - cropW) / 2);
+    } else {
+      cropH = Math.max(1, Math.round(srcW / targetAspect));
+      sy = Math.floor((srcH - cropH) / 2);
+    }
+
+    canvas.width = cropW;
+    canvas.height = cropH;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) return blob;
+    ctx.drawImage(decoded.source, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
+    return await canvasToBlob(canvas, 'image/jpeg', quality);
   } finally {
     decoded.close();
     releaseCanvas(canvas);

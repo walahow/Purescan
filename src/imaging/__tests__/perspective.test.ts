@@ -143,24 +143,27 @@ describe('perspective geometry & homography warp', () => {
     const dstW = 60;
     const dstH = 80;
     const warped = warpPerspective(src, srcW, srcH, quad, dstW, dstH);
+    const warpedHq = warpPerspective(src, srcW, srcH, quad, dstW, dstH, true);
 
-    const sample = (x: number, y: number) => {
+    const sample = (x: number, y: number, buf = warped) => {
       const i = (y * dstW + x) * 4;
-      return [warped[i], warped[i + 1], warped[i + 2]];
+      return [buf[i], buf[i + 1], buf[i + 2]];
     };
 
-    // Corners should match the 4 distinct colors cleanly
-    expect(sample(4, 4)[0]).toBeGreaterThan(220); // Red TL
-    expect(sample(4, 4)[1]).toBeLessThan(40);
-    expect(sample(dstW - 5, 4)[1]).toBeGreaterThan(220); // Green TR
-    expect(sample(dstW - 5, dstH - 5)[2]).toBeGreaterThan(220); // Blue BR
-    expect(sample(4, dstH - 5)[0]).toBeGreaterThan(220); // Yellow BL
-    expect(sample(4, dstH - 5)[1]).toBeGreaterThan(220);
-    // Center should be clean white paper
-    const center = sample(30, 40);
-    expect(center[0]).toBeGreaterThan(240);
-    expect(center[1]).toBeGreaterThan(240);
-    expect(center[2]).toBeGreaterThan(240);
+    // Corners should match the 4 distinct colors cleanly (bilinear + Catmull-Rom)
+    for (const buf of [warped, warpedHq]) {
+      expect(sample(4, 4, buf)[0]).toBeGreaterThan(220); // Red TL
+      expect(sample(4, 4, buf)[1]).toBeLessThan(40);
+      expect(sample(dstW - 5, 4, buf)[1]).toBeGreaterThan(220); // Green TR
+      expect(sample(dstW - 5, dstH - 5, buf)[2]).toBeGreaterThan(220); // Blue BR
+      expect(sample(4, dstH - 5, buf)[0]).toBeGreaterThan(220); // Yellow BL
+      expect(sample(4, dstH - 5, buf)[1]).toBeGreaterThan(220);
+      // Center should be clean white paper
+      const center = sample(30, 40, buf);
+      expect(center[0]).toBeGreaterThan(240);
+      expect(center[1]).toBeGreaterThan(240);
+      expect(center[2]).toBeGreaterThan(240);
+    }
   });
 
   it('rotates RGBA buffers accurately for 90, 180, and 270 degrees', () => {

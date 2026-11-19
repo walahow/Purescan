@@ -15,9 +15,11 @@ import {
   createThumbnailBlob,
   ingestImageBlob,
   MAX_INGEST_DIM,
+  MAX_OUTPUT_DIM,
   rgbaToJpegBlob,
 } from '../imaging/ingest';
-import { createDefaultQuad } from '../imaging/perspective';
+import { detectDocumentQuad } from '../imaging/documentDetector';
+import { computeSharpnessScore } from '../imaging/sharpness';
 import { processImageInWorker } from '../imaging/workerClient';
 import {
   DEFAULT_ADJUSTMENTS,
@@ -28,6 +30,7 @@ import {
   type Quad,
   type Rotation,
   type ScanPage,
+  type SharpnessReport,
 } from '../types/scan';
 
 export interface PendingDraft {
@@ -41,6 +44,10 @@ export interface PendingDraft {
   rotation: Rotation;
   filter: FilterPreset;
   adjustments: FilterAdjustments;
+  autoDetected?: boolean;
+  sharpness?: SharpnessReport;
+  fromCamera?: boolean;
+  fallbackQuad?: Quad;
 }
 
 function generateId(): string {
@@ -68,10 +75,11 @@ async function renderPageOutputs(params: {
     rotation: params.rotation,
     filter: params.filter,
     adjustments: params.adjustments,
-    maxOutputDim: MAX_INGEST_DIM,
+    maxOutputDim: MAX_OUTPUT_DIM,
+    highQualityWarp: true,
   });
 
-  const processedBlob = await rgbaToJpegBlob(out.pixels, out.width, out.height, 0.88);
+  const processedBlob = await rgbaToJpegBlob(out.pixels, out.width, out.height, 0.92);
   const thumbnailBlob = await createThumbnailBlob(processedBlob);
   return {
     processedBlob,
@@ -159,25 +167,44 @@ export function useScanWorkspace() {
     };
   }, []);
 
-  const prepareSingleDraft = useCallback(async (fileOrBlob: Blob): Promise<PendingDraft> => {
-    setBusyLabel('Preparing photo...');
-    try {
-      const ingested = await ingestImageBlob(fileOrBlob, MAX_INGEST_DIM, 0.92);
-      return {
-        existingPageId: null,
-        originalBlob: ingested.blob,
-        originalWidth: ingested.width,
-        originalHeight: ingested.height,
-        quad: createDefaultQuad(0.05),
-        aspectMode: 'auto',
-        rotation: 0,
-        filter: 'pure-color',
-        adjustments: { ...DEFAULT_ADJUSTMENTS },
-      };
-    } finally {
-      setBusyLabel(null);
-    }
-  }, []);
+  const prepareSingleDraft = useCallback(
+    async (
+      fileOrBlob: Blob,
+      options?: { fromCamera?: boolean; fallbackQuad?: Quad }
+    ): Promise<PendingDraft> => {
+      setBusyLabel('Detecting document edges...');
+      try {
+        const ingested = await ingestImageBlob(fileOrBlob, MAX_INGEST_DIM, 0.94);
+        const probe = await blobToImageData(ingested.blob, 320);
+        const detection = detectDocumentQuad(
+          probe.pixels,
+          probe.width,
+          probe.height,
+          options?.fallbackQuad
+        );
+        const sharpness = computeSharpnessScore(probe.pixels, probe.width, probe.height);
+
+        return {
+          existingPageId: null,
+          originalBlob: ingested.blob,
+          originalWidth: ingested.width,
+          originalHeight: ingested.height,
+          quad: detection.quad,
+          aspectMode: 'auto',
+          rotation: 0,
+          filter: 'pure-color',
+          adjustments: { ...DEFAULT_ADJUSTMENTS },
+          autoDetected: detection.detected,
+          sharpness,
+          fromCamera: options?.fromCamera,
+          fallbackQuad: options?.fallbackQuad,
+        };
+      } finally {
+        setBusyLabel(null);
+      }
+    },
+    []
+  );
 
   const commitDraft = useCallback(
     async (draft: PendingDraft): Promise<ScanPage> => {
@@ -242,20 +269,34 @@ export function useScanWorkspace() {
   );
 
   /**
-   * Batch imports/adds multiple photos directly into the workspace (auto-processed with Pure Color
-   * and slight default quad, ready for quick per-page trim or instant PDF export).
+   * Batch imports/adds multiple photos directly into the workspace (auto-cropped via
+   * document boundary detection and enhanced with Pure Color).
    */
   const addBatchBlobs = useCallback(
-    async (blobs: Blob[], defaultFilter: FilterPreset = 'pure-color'): Promise<number> => {
-      if (blobs.length === 0) return 0;
+    async (
+      items: Array<Blob | { blob: Blob; fallbackQuad?: Quad }>,
+      defaultFilter: FilterPreset = 'pure-color'
+    ): Promise<number> => {
+      if (items.length === 0) return 0;
       const newPages: ScanPage[] = [];
       let nextOrder = pages.reduce((m, p) => Math.max(m, p.order), -1) + 1;
 
       try {
-        for (let i = 0; i < blobs.length; i++) {
-          setBusyLabel(`Processing page ${i + 1} of ${blobs.length}...`);
-          const ingested = await ingestImageBlob(blobs[i], MAX_INGEST_DIM, 0.92);
-          const quad = createDefaultQuad(0.02);
+        for (let i = 0; i < items.length; i++) {
+          setBusyLabel(`Auto-cropping page ${i + 1} of ${items.length}...`);
+          const item = items[i];
+          const rawBlob = item instanceof Blob ? item : item.blob;
+          const fallbackQuad = item instanceof Blob ? undefined : item.fallbackQuad;
+
+          const ingested = await ingestImageBlob(rawBlob, MAX_INGEST_DIM, 0.94);
+          const probe = await blobToImageData(ingested.blob, 320);
+          const detection = detectDocumentQuad(
+            probe.pixels,
+            probe.width,
+            probe.height,
+            fallbackQuad
+          );
+          const quad = detection.quad;
           const adjustments = { ...DEFAULT_ADJUSTMENTS };
           const rendered = await renderPageOutputs({
             originalBlob: ingested.blob,

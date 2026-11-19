@@ -20,6 +20,7 @@ export interface ProcessParams {
   filter: FilterPreset;
   adjustments: FilterAdjustments;
   maxOutputDim: number;
+  highQualityWarp?: boolean;
 }
 
 export interface ProcessOutput {
@@ -79,7 +80,15 @@ function getWorker(): Worker | null {
 
 function processSynchronously(params: ProcessParams): ProcessOutput {
   const target = computeTargetSize(params.quad, params.width, params.height, params.aspectMode, params.maxOutputDim);
-  const warped = warpPerspective(params.pixels, params.width, params.height, params.quad, target.width, target.height);
+  const warped = warpPerspective(
+    params.pixels,
+    params.width,
+    params.height,
+    params.quad,
+    target.width,
+    target.height,
+    Boolean(params.highQualityWarp)
+  );
   const filtered = applyDocumentFilter(warped, target.width, target.height, params.filter, params.adjustments);
   return rotateImageBuffer(filtered, target.width, target.height, params.rotation);
 }
@@ -111,6 +120,7 @@ export async function processImageInWorker(params: ProcessParams): Promise<Proce
     filter: params.filter,
     adjustments: params.adjustments,
     maxOutputDim: params.maxOutputDim,
+    highQualityWarp: params.highQualityWarp,
   };
 
   try {

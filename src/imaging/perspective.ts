@@ -186,8 +186,36 @@ export function solveHomography(
 }
 
 /**
+ * Maps a normalized point [0..1] in original image coordinates to visually rotated display coordinates.
+ */
+export function rotatePointCw(p: Point, rotation: Rotation): Point {
+  switch (rotation) {
+    case 90:
+      return { x: 1 - p.y, y: p.x };
+    case 180:
+      return { x: 1 - p.x, y: 1 - p.y };
+    case 270:
+      return { x: p.y, y: 1 - p.x };
+    default:
+      return { x: p.x, y: p.y };
+  }
+}
+
+/**
+ * Inverse of rotatePointCw: maps a normalized point in visually rotated display coordinates
+ * back to original unrotated image coordinates.
+ */
+export function unrotatePointCw(p: Point, rotation: Rotation): Point {
+  const inv = ((360 - rotation) % 360) as Rotation;
+  return rotatePointCw(p, inv);
+}
+
+/**
  * Perspective-warps an RGBA pixel buffer from the normalized 4-corner quad
- * into a rectangular output buffer of size (dstW x dstH) using bilinear interpolation.
+ * into a rectangular output buffer of size (dstW x dstH).
+ *
+ * Uses fast bilinear sampling for live previews (highQuality = false) and
+ * Catmull-Rom bicubic (4x4) interpolation for crisp text on full-resolution saves.
  */
 export function warpPerspective(
   src: Uint8ClampedArray,
@@ -195,7 +223,8 @@ export function warpPerspective(
   srcH: number,
   quad: Quad,
   dstW: number,
-  dstH: number
+  dstH: number,
+  highQuality = false
 ): Uint8ClampedArray {
   const maxSrcX = Math.max(0, srcW - 1);
   const maxSrcY = Math.max(0, srcH - 1);
@@ -215,6 +244,63 @@ export function warpPerspective(
   const dst = new Uint8ClampedArray(dstW * dstH * 4);
   const srcStride = srcW * 4;
 
+  if (!highQuality) {
+    let dstIdx = 0;
+    for (let dy = 0; dy < dstH; dy++) {
+      let numX = h1 * dy + h2;
+      let numY = h4 * dy + h5;
+      let den = h7 * dy + 1;
+
+      for (let dx = 0; dx < dstW; dx++) {
+        const invDen = 1 / den;
+        let sx = numX * invDen;
+        let sy = numY * invDen;
+
+        if (sx < 0) sx = 0;
+        else if (sx > maxSrcX) sx = maxSrcX;
+        if (sy < 0) sy = 0;
+        else if (sy > maxSrcY) sy = maxSrcY;
+
+        const x0 = sx | 0;
+        const y0 = sy | 0;
+        const x1 = x0 < maxSrcX ? x0 + 1 : maxSrcX;
+        const y1 = y0 < maxSrcY ? y0 + 1 : maxSrcY;
+
+        const fx = sx - x0;
+        const fy = sy - y0;
+        const ifx = 1 - fx;
+        const ify = 1 - fy;
+
+        const w00 = ifx * ify;
+        const w10 = fx * ify;
+        const w01 = ifx * fy;
+        const w11 = fx * fy;
+
+        const row0 = y0 * srcStride;
+        const row1 = y1 * srcStride;
+        const i00 = row0 + x0 * 4;
+        const i10 = row0 + x1 * 4;
+        const i01 = row1 + x0 * 4;
+        const i11 = row1 + x1 * 4;
+
+        dst[dstIdx] = src[i00] * w00 + src[i10] * w10 + src[i01] * w01 + src[i11] * w11 + 0.5;
+        dst[dstIdx + 1] =
+          src[i00 + 1] * w00 + src[i10 + 1] * w10 + src[i01 + 1] * w01 + src[i11 + 1] * w11 + 0.5;
+        dst[dstIdx + 2] =
+          src[i00 + 2] * w00 + src[i10 + 2] * w10 + src[i01 + 2] * w01 + src[i11 + 2] * w11 + 0.5;
+        dst[dstIdx + 3] = 255;
+
+        dstIdx += 4;
+        numX += h0;
+        numY += h3;
+        den += h6;
+      }
+    }
+
+    return dst;
+  }
+
+  // High-quality Catmull-Rom bicubic (4x4 taps) for sharp text strokes on full-res save
   let dstIdx = 0;
   for (let dy = 0; dy < dstH; dy++) {
     let numX = h1 * dy + h2;
@@ -226,39 +312,75 @@ export function warpPerspective(
       let sx = numX * invDen;
       let sy = numY * invDen;
 
-      // Clamp safely inside source bounds
       if (sx < 0) sx = 0;
       else if (sx > maxSrcX) sx = maxSrcX;
       if (sy < 0) sy = 0;
       else if (sy > maxSrcY) sy = maxSrcY;
 
-      const x0 = sx | 0;
-      const y0 = sy | 0;
-      const x1 = x0 < maxSrcX ? x0 + 1 : maxSrcX;
-      const y1 = y0 < maxSrcY ? y0 + 1 : maxSrcY;
+      const ix = sx | 0;
+      const iy = sy | 0;
+      const fx = sx - ix;
+      const fy = sy - iy;
 
-      const fx = sx - x0;
-      const fy = sy - y0;
-      const ifx = 1 - fx;
-      const ify = 1 - fy;
+      const fx2 = fx * fx;
+      const fx3 = fx2 * fx;
+      const wx0 = -0.5 * fx + fx2 - 0.5 * fx3;
+      const wx1 = 1 - 2.5 * fx2 + 1.5 * fx3;
+      const wx2 = 0.5 * fx + 2 * fx2 - 1.5 * fx3;
+      const wx3 = -0.5 * fx2 + 0.5 * fx3;
 
-      const w00 = ifx * ify;
-      const w10 = fx * ify;
-      const w01 = ifx * fy;
-      const w11 = fx * fy;
+      const fy2 = fy * fy;
+      const fy3 = fy2 * fy;
+      const wy0 = -0.5 * fy + fy2 - 0.5 * fy3;
+      const wy1 = 1 - 2.5 * fy2 + 1.5 * fy3;
+      const wy2 = 0.5 * fy + 2 * fy2 - 1.5 * fy3;
+      const wy3 = -0.5 * fy2 + 0.5 * fy3;
 
-      const row0 = y0 * srcStride;
-      const row1 = y1 * srcStride;
-      const i00 = row0 + x0 * 4;
-      const i10 = row0 + x1 * 4;
-      const i01 = row1 + x0 * 4;
-      const i11 = row1 + x1 * 4;
+      const x0 = ix > 0 ? ix - 1 : 0;
+      const x1 = ix;
+      const x2 = ix + 1 <= maxSrcX ? ix + 1 : maxSrcX;
+      const x3 = ix + 2 <= maxSrcX ? ix + 2 : maxSrcX;
 
-      dst[dstIdx] = src[i00] * w00 + src[i10] * w10 + src[i01] * w01 + src[i11] * w11 + 0.5;
-      dst[dstIdx + 1] =
-        src[i00 + 1] * w00 + src[i10 + 1] * w10 + src[i01 + 1] * w01 + src[i11 + 1] * w11 + 0.5;
-      dst[dstIdx + 2] =
-        src[i00 + 2] * w00 + src[i10 + 2] * w10 + src[i01 + 2] * w01 + src[i11 + 2] * w11 + 0.5;
+      const y0 = iy > 0 ? iy - 1 : 0;
+      const y1 = iy;
+      const y2 = iy + 1 <= maxSrcY ? iy + 1 : maxSrcY;
+      const y3 = iy + 2 <= maxSrcY ? iy + 2 : maxSrcY;
+
+      const r0 = y0 * srcStride;
+      const r1 = y1 * srcStride;
+      const r2 = y2 * srcStride;
+      const r3 = y3 * srcStride;
+
+      const ox0 = x0 * 4;
+      const ox1 = x1 * 4;
+      const ox2 = x2 * 4;
+      const ox3 = x3 * 4;
+
+      for (let c = 0; c < 3; c++) {
+        const v0 =
+          src[r0 + ox0 + c] * wx0 +
+          src[r0 + ox1 + c] * wx1 +
+          src[r0 + ox2 + c] * wx2 +
+          src[r0 + ox3 + c] * wx3;
+        const v1 =
+          src[r1 + ox0 + c] * wx0 +
+          src[r1 + ox1 + c] * wx1 +
+          src[r1 + ox2 + c] * wx2 +
+          src[r1 + ox3 + c] * wx3;
+        const v2 =
+          src[r2 + ox0 + c] * wx0 +
+          src[r2 + ox1 + c] * wx1 +
+          src[r2 + ox2 + c] * wx2 +
+          src[r2 + ox3 + c] * wx3;
+        const v3 =
+          src[r3 + ox0 + c] * wx0 +
+          src[r3 + ox1 + c] * wx1 +
+          src[r3 + ox2 + c] * wx2 +
+          src[r3 + ox3 + c] * wx3;
+
+        const val = v0 * wy0 + v1 * wy1 + v2 * wy2 + v3 * wy3;
+        dst[dstIdx + c] = val <= 0 ? 0 : val >= 255 ? 255 : (val + 0.5) | 0;
+      }
       dst[dstIdx + 3] = 255;
 
       dstIdx += 4;

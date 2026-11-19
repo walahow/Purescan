@@ -227,7 +227,7 @@ export function FilterView({
       {/* Main Split Studio */}
       <div className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden">
         {/* LEFT: HYDE Document Paper Stage */}
-        <div className="flex-1 flex flex-col min-h-0 bg-[#f0f0f2]">
+        <div className="flex-1 flex flex-col min-h-0 min-w-0 bg-[#f0f0f2]">
           {/* Stage Sub-Toolbar (matches HYDE DocumentCanvas.tsx) */}
           <div className="h-11 shrink-0 border-b border-zinc-200 bg-white/85 backdrop-blur-md px-3 sm:px-4 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">

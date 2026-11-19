@@ -173,6 +173,24 @@ export interface PdfCompressResult {
   appliedProfileLabel: string;
 }
 
+export type SharpnessStatus = 'sharp' | 'fair' | 'blurry';
+
+export interface SharpnessReport {
+  score: number;
+  status: SharpnessStatus;
+}
+
+export interface DocumentDetectionResult {
+  quad: Quad;
+  confidence: number;
+  detected: boolean;
+}
+
+export interface CameraCaptureResult {
+  blob: Blob;
+  fallbackQuad?: Quad;
+}
+
 export interface WorkerProcessRequest {
   requestId: number;
   pixels: ArrayBuffer;
@@ -184,6 +202,7 @@ export interface WorkerProcessRequest {
   filter: FilterPreset;
   adjustments: FilterAdjustments;
   maxOutputDim: number;
+  highQualityWarp?: boolean;
 }
 
 export interface WorkerProcessResponse {

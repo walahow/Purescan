@@ -12,7 +12,14 @@ import { TopNavbar, type AppMode } from './components/ui/TopNavbar';
 import { usePwaStatus } from './hooks/usePwaInstall';
 import { useScanWorkspace, type PendingDraft } from './hooks/useScanWorkspace';
 import { generateSampleShadowedDocument } from './imaging/sampleDoc';
-import type { AspectMode, FilterPreset, Quad, Rotation, ScanPage } from './types/scan';
+import type {
+  AspectMode,
+  CameraCaptureResult,
+  FilterPreset,
+  Quad,
+  Rotation,
+  ScanPage,
+} from './types/scan';
 
 type ActiveScreen = 'workspace' | 'camera' | 'crop' | 'filter';
 
@@ -117,9 +124,12 @@ export default function App() {
     if (files.length > 0) void handleIncomingFiles(files);
   };
 
-  const handleSingleCameraCapture = async (blob: Blob) => {
+  const handleSingleCameraCapture = async (capture: CameraCaptureResult) => {
     try {
-      const draft = await prepareSingleDraft(blob);
+      const draft = await prepareSingleDraft(capture.blob, {
+        fromCamera: true,
+        fallbackQuad: capture.fallbackQuad,
+      });
       setActiveDraft(draft);
       setScreen('crop');
     } catch (err) {
@@ -128,16 +138,19 @@ export default function App() {
     }
   };
 
-  const handleBatchCameraComplete = async (blobs: Blob[]) => {
+  const handleBatchCameraComplete = async (captures: CameraCaptureResult[]) => {
     setScreen('workspace');
-    if (blobs.length === 0) return;
+    if (captures.length === 0) return;
     try {
-      if (blobs.length === 1) {
-        const draft = await prepareSingleDraft(blobs[0]);
+      if (captures.length === 1) {
+        const draft = await prepareSingleDraft(captures[0].blob, {
+          fromCamera: true,
+          fallbackQuad: captures[0].fallbackQuad,
+        });
         setActiveDraft(draft);
         setScreen('crop');
       } else {
-        await addBatchBlobs(blobs, 'pure-color');
+        await addBatchBlobs(captures, 'pure-color');
       }
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Failed to process captured batch.');
@@ -289,8 +302,8 @@ export default function App() {
       {/* Fullscreen Live Camera Screen */}
       {screen === 'camera' && (
         <CameraView
-          onSingleCapture={(blob) => void handleSingleCameraCapture(blob)}
-          onBatchComplete={(blobs) => void handleBatchCameraComplete(blobs)}
+          onSingleCapture={(capture) => void handleSingleCameraCapture(capture)}
+          onBatchComplete={(captures) => void handleBatchCameraComplete(captures)}
           onFallbackGallery={() => {
             setScreen('workspace');
             window.setTimeout(() => galleryInputRef.current?.click(), 50);
@@ -299,13 +312,24 @@ export default function App() {
         />
       )}
 
-      {/* Fullscreen 4-Corner Manual Perspective Crop Screen */}
+      {/* Fullscreen 4-Corner Perspective Crop Screen */}
       {screen === 'crop' && activeDraft && (
         <CropView
           imageBlob={activeDraft.originalBlob}
           initialQuad={activeDraft.quad}
           initialAspect={activeDraft.aspectMode}
           initialRotation={activeDraft.rotation}
+          autoDetected={activeDraft.autoDetected}
+          sharpness={activeDraft.sharpness}
+          fallbackQuad={activeDraft.fallbackQuad}
+          onRetake={
+            activeDraft.fromCamera
+              ? () => {
+                  setActiveDraft(null);
+                  setScreen('camera');
+                }
+              : undefined
+          }
           onBack={() => {
             if (activeDraft.existingPageId) {
               setScreen('filter');

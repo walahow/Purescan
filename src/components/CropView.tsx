@@ -1,19 +1,26 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
+  Camera,
   Maximize2,
   RotateCcw,
   RotateCw,
   Scan,
+  Sparkles,
+  X,
 } from 'lucide-react';
+import { detectDocumentQuad } from '../imaging/documentDetector';
 import {
   clampPoint,
   createDefaultQuad,
   createFullQuad,
   isConvexQuad,
+  rotatePointCw,
+  unrotatePointCw,
 } from '../imaging/perspective';
-import type { AspectMode, Point, Quad, Rotation } from '../types/scan';
+import type { AspectMode, Point, Quad, Rotation, SharpnessReport } from '../types/scan';
 import { CornerTickButton } from './ui/DraftingFrame';
 
 interface CropViewProps {
@@ -21,6 +28,10 @@ interface CropViewProps {
   initialQuad: Quad;
   initialAspect: AspectMode;
   initialRotation: Rotation;
+  autoDetected?: boolean;
+  sharpness?: SharpnessReport;
+  fallbackQuad?: Quad;
+  onRetake?: () => void;
   onBack: () => void;
   onConfirm: (result: { quad: Quad; aspectMode: AspectMode; rotation: Rotation }) => void;
 }
@@ -39,20 +50,28 @@ type DragTarget =
   | { kind: 'edge'; edgeIndex: 0 | 1 | 2 | 3; startPointer: Point; startQuad: Quad };
 
 const CORNER_LABELS = ['TL', 'TR', 'BR', 'BL'] as const;
-const LOUPE_SIZE = 128;
-const LOUPE_ZOOM = 2.6;
+const LOUPE_SIZE = 132;
+const LOUPE_ZOOM = 3.0;
 
 export function CropView({
   imageBlob,
   initialQuad,
   initialAspect,
   initialRotation,
+  autoDetected = false,
+  sharpness,
+  fallbackQuad,
+  onRetake,
   onBack,
   onConfirm,
 }: CropViewProps) {
   const [quad, setQuad] = useState<Quad>(() => initialQuad.map((p) => ({ ...p })) as Quad);
   const [aspectMode, setAspectMode] = useState<AspectMode>(initialAspect);
   const [rotation, setRotation] = useState<Rotation>(initialRotation);
+  const [quadSource, setQuadSource] = useState<'auto' | 'guide' | 'manual'>(
+    autoDetected ? 'auto' : fallbackQuad ? 'guide' : 'manual'
+  );
+  const [blurWarningDismissed, setBlurWarningDismissed] = useState(false);
   const [activeDrag, setActiveDrag] = useState<DragTarget | null>(null);
   const [rotatePulse, setRotatePulse] = useState(false);
   const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
@@ -72,16 +91,19 @@ export function CropView({
     };
   }, [imageBlob]);
 
-  // Keep fitted image rectangle synchronized with stage container size
+  // Keep fitted (rotation-aware) image rectangle synchronized with stage container size
   const recalcLayout = useCallback(() => {
     if (!stageRef.current || !imgEl) return;
     const rect = stageRef.current.getBoundingClientRect();
     const pad = window.innerWidth < 640 ? 28 : 44;
     const availW = Math.max(80, rect.width - pad * 2);
     const availH = Math.max(80, rect.height - pad * 2);
-    const scale = Math.min(availW / imgEl.naturalWidth, availH / imgEl.naturalHeight);
-    const drawW = imgEl.naturalWidth * scale;
-    const drawH = imgEl.naturalHeight * scale;
+    const swapped = rotation === 90 || rotation === 270;
+    const dispNatW = swapped ? imgEl.naturalHeight : imgEl.naturalWidth;
+    const dispNatH = swapped ? imgEl.naturalWidth : imgEl.naturalHeight;
+    const scale = Math.min(availW / dispNatW, availH / dispNatH);
+    const drawW = dispNatW * scale;
+    const drawH = dispNatH * scale;
     setLayout({
       offsetX: (rect.width - drawW) / 2,
       offsetY: (rect.height - drawH) / 2,
@@ -90,7 +112,7 @@ export function CropView({
       stageW: rect.width,
       stageH: rect.height,
     });
-  }, [imgEl]);
+  }, [imgEl, rotation]);
 
   useEffect(() => {
     recalcLayout();
@@ -103,7 +125,7 @@ export function CropView({
     };
   }, [recalcLayout]);
 
-  // Render crisp zoomed pixels into circular magnifier loupe while dragging a corner
+  // Render crisp zoomed pixels into circular/square magnifier loupe while dragging a corner
   useEffect(() => {
     if (!activeDrag || activeDrag.kind !== 'corner' || !imgEl || !loupeCanvasRef.current) return;
     const canvas = loupeCanvasRef.current;
@@ -117,7 +139,6 @@ export function CropView({
     const srcX = pt.x * imgEl.naturalWidth;
     const srcY = pt.y * imgEl.naturalHeight;
 
-    // Sample window size in source pixels
     const sampleSpan = Math.min(imgEl.naturalWidth, imgEl.naturalHeight) / (LOUPE_ZOOM * 2.2);
     const half = sampleSpan / 2;
 
@@ -125,6 +146,13 @@ export function CropView({
     ctx.scale(dpr, dpr);
     ctx.fillStyle = '#18181b';
     ctx.fillRect(0, 0, LOUPE_SIZE, LOUPE_SIZE);
+
+    // Rotate image & quad edge lines inside loupe to match current visual stage orientation
+    ctx.save();
+    ctx.translate(LOUPE_SIZE / 2, LOUPE_SIZE / 2);
+    ctx.rotate((rotation * Math.PI) / 180);
+    ctx.translate(-LOUPE_SIZE / 2, -LOUPE_SIZE / 2);
+
     ctx.drawImage(
       imgEl,
       srcX - half,
@@ -137,7 +165,6 @@ export function CropView({
       LOUPE_SIZE
     );
 
-    // Draw zoomed quad corner edges inside loupe
     const prevPt = quad[(activeDrag.index + 3) % 4];
     const nextPt = quad[(activeDrag.index + 1) % 4];
     const toLoupe = (target: Point) => ({
@@ -154,8 +181,9 @@ export function CropView({
     ctx.lineTo(LOUPE_SIZE / 2, LOUPE_SIZE / 2);
     ctx.lineTo(lpNext.x, lpNext.y);
     ctx.stroke();
+    ctx.restore();
 
-    // Precision crosshair at center
+    // Precision unrotated crosshair at center
     const mid = LOUPE_SIZE / 2;
     ctx.strokeStyle = 'rgba(255,255,255,0.9)';
     ctx.lineWidth = 1;
@@ -170,20 +198,21 @@ export function CropView({
     ctx.lineTo(mid, mid + 16);
     ctx.stroke();
 
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = '#2eb846';
     ctx.fillRect(mid - 2, mid - 2, 4, 4);
     ctx.restore();
-  }, [activeDrag, imgEl, quad]);
+  }, [activeDrag, imgEl, quad, rotation]);
 
-  const clientToNormalized = useCallback(
+  const clientToOriginalNormalized = useCallback(
     (clientX: number, clientY: number): Point | null => {
       if (!stageRef.current || !layout) return null;
       const rect = stageRef.current.getBoundingClientRect();
-      const x = (clientX - rect.left - layout.offsetX) / layout.drawW;
-      const y = (clientY - rect.top - layout.offsetY) / layout.drawH;
-      return clampPoint({ x, y });
+      const dispX = (clientX - rect.left - layout.offsetX) / layout.drawW;
+      const dispY = (clientY - rect.top - layout.offsetY) / layout.drawH;
+      const clampedDisp = clampPoint({ x: dispX, y: dispY });
+      return clampPoint(unrotatePointCw(clampedDisp, rotation));
     },
-    [layout]
+    [layout, rotation]
   );
 
   const handleCornerDown = (index: 0 | 1 | 2 | 3) => (e: React.PointerEvent) => {
@@ -196,7 +225,7 @@ export function CropView({
   const handleEdgeDown = (edgeIndex: 0 | 1 | 2 | 3) => (e: React.PointerEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    const norm = clientToNormalized(e.clientX, e.clientY);
+    const norm = clientToOriginalNormalized(e.clientX, e.clientY);
     if (!norm) return;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     setActiveDrag({
@@ -210,8 +239,10 @@ export function CropView({
   const handleStagePointerMove = (e: React.PointerEvent) => {
     if (!activeDrag) return;
     e.preventDefault();
-    const norm = clientToNormalized(e.clientX, e.clientY);
+    const norm = clientToOriginalNormalized(e.clientX, e.clientY);
     if (!norm) return;
+
+    setQuadSource('manual');
 
     if (activeDrag.kind === 'corner') {
       setQuad((prev) => {
@@ -237,16 +268,42 @@ export function CropView({
     setActiveDrag(null);
   };
 
-  // Position magnifier loupe in opposite top corner so user's finger never covers it
-  const activeCornerPoint =
-    activeDrag && activeDrag.kind === 'corner' ? quad[activeDrag.index] : null;
-  const loupeOnRight = activeCornerPoint ? activeCornerPoint.x < 0.5 : true;
+  const handleAutoDetect = () => {
+    if (!imgEl) return;
+    const targetMax = 320;
+    const scale = Math.min(1, targetMax / Math.max(imgEl.naturalWidth, imgEl.naturalHeight));
+    const w = Math.max(32, Math.round(imgEl.naturalWidth * scale));
+    const h = Math.max(32, Math.round(imgEl.naturalHeight * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    try {
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+      ctx.drawImage(imgEl, 0, 0, w, h);
+      const data = ctx.getImageData(0, 0, w, h);
+      const res = detectDocumentQuad(data.data, w, h, fallbackQuad ?? createDefaultQuad(0.05));
+      setQuad(res.quad);
+      setQuadSource(res.detected ? 'auto' : fallbackQuad ? 'guide' : 'manual');
+    } finally {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  };
 
-  const toStagePx = (p: Point) => {
+  // Position magnifier loupe in opposite top corner so user's finger never covers it
+  const activeVisualPoint =
+    activeDrag && activeDrag.kind === 'corner'
+      ? rotatePointCw(quad[activeDrag.index], rotation)
+      : null;
+  const loupeOnRight = activeVisualPoint ? activeVisualPoint.x < 0.5 : true;
+
+  const toStagePx = (origPt: Point) => {
     if (!layout) return { x: 0, y: 0 };
+    const dispPt = rotatePointCw(origPt, rotation);
     return {
-      x: layout.offsetX + p.x * layout.drawW,
-      y: layout.offsetY + p.y * layout.drawH,
+      x: layout.offsetX + dispPt.x * layout.drawW,
+      y: layout.offsetY + dispPt.y * layout.drawH,
     };
   };
 
@@ -263,6 +320,9 @@ export function CropView({
   const handleConfirm = () => {
     onConfirm({ quad, aspectMode, rotation });
   };
+
+  const unrotW = layout ? (rotation === 90 || rotation === 270 ? layout.drawH : layout.drawW) : 0;
+  const unrotH = layout ? (rotation === 90 || rotation === 270 ? layout.drawW : layout.drawH) : 0;
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-[#f5f5f7] text-zinc-900">
@@ -281,6 +341,19 @@ export function CropView({
           <Scan size={15} className="text-zinc-900" />
           <span className="font-mono text-[11px] font-bold uppercase tracking-[0.2em] text-zinc-900">
             TRIM_CORNERS
+          </span>
+          <span
+            className={`hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider border ${
+              quadSource === 'auto'
+                ? 'bg-emerald-50 text-[#229638] border-emerald-200'
+                : 'bg-zinc-100 text-zinc-600 border-zinc-200'
+            }`}
+          >
+            {quadSource === 'auto'
+              ? 'AUTO_SNAPPED'
+              : quadSource === 'guide'
+              ? 'A4_GUIDE'
+              : 'MANUAL'}
           </span>
         </div>
 
@@ -303,7 +376,7 @@ export function CropView({
           onPointerMove={handleStagePointerMove}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerUp}
-          className="relative flex-1 bg-[#141417] overflow-hidden select-none touch-none"
+          className="relative flex-1 min-w-0 bg-[#141417] overflow-hidden select-none touch-none"
         >
           {imgEl && layout && (
             <>
@@ -313,10 +386,12 @@ export function CropView({
                 draggable={false}
                 style={{
                   position: 'absolute',
-                  left: layout.offsetX,
-                  top: layout.offsetY,
-                  width: layout.drawW,
-                  height: layout.drawH,
+                  left: layout.offsetX + (layout.drawW - unrotW) / 2,
+                  top: layout.offsetY + (layout.drawH - unrotH) / 2,
+                  width: unrotW,
+                  height: unrotH,
+                  transform: `rotate(${rotation}deg)`,
+                  transformOrigin: 'center center',
                 }}
                 className="pointer-events-none select-none"
               />
@@ -370,7 +445,7 @@ export function CropView({
                 <polygon
                   points={stagePts.map((p) => `${p.x},${p.y}`).join(' ')}
                   fill="none"
-                  stroke="#ffffff"
+                  stroke={quadSource === 'auto' ? '#2eb846' : '#ffffff'}
                   strokeWidth="2.5"
                 />
               </svg>
@@ -435,17 +510,47 @@ export function CropView({
                     className="block"
                   />
                   <span className="absolute bottom-1 right-1 bg-zinc-950/85 px-1.5 py-0.5 font-mono text-[9px] font-bold text-white">
-                    {CORNER_LABELS[activeDrag.index]} · 2.6×
+                    {CORNER_LABELS[activeDrag.index]} · 3.0×
                   </span>
                 </div>
               )}
             </>
           )}
 
+          {/* Non-blocking Soft-Focus Warning Banner */}
+          {sharpness?.status === 'blurry' && !blurWarningDismissed && !activeDrag && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2.5 bg-amber-400 text-zinc-950 border border-amber-500 px-3 py-1.5 shadow-lg max-w-[92%]">
+              <AlertTriangle size={14} className="shrink-0" />
+              <span className="font-mono text-[10px] font-bold uppercase tracking-wider truncate">
+                SOFT_FOCUS · TEXT MAY BE BLURRY
+              </span>
+              {onRetake && (
+                <button
+                  type="button"
+                  onClick={onRetake}
+                  className="shrink-0 bg-zinc-950 text-white px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider flex items-center gap-1 hover:bg-zinc-800 cursor-pointer"
+                >
+                  <Camera size={11} />
+                  Retake
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setBlurWarningDismissed(true)}
+                aria-label="Dismiss focus warning"
+                className="shrink-0 text-zinc-900/75 hover:text-zinc-950 cursor-pointer"
+              >
+                <X size={13} />
+              </button>
+            </div>
+          )}
+
           {/* Subtle Hint Badge */}
           {!activeDrag && (
             <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 bg-zinc-950/80 border border-zinc-800 px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-zinc-300 whitespace-nowrap">
-              Drag corners or edges to align page borders
+              {quadSource === 'auto'
+                ? 'Edges auto-detected · fine-tune if needed'
+                : 'Drag corners or edges to align page borders'}
             </div>
           )}
         </div>
@@ -479,13 +584,7 @@ export function CropView({
                     }`}
                   >
                     <span className="text-[11px] font-bold uppercase tracking-wider">{opt.label}</span>
-                    <span
-                      className={`text-[9px] ${
-                        aspectMode === opt.id ? 'text-zinc-400' : 'text-zinc-400'
-                      }`}
-                    >
-                      {opt.sub}
-                    </span>
+                    <span className="text-[9px] text-zinc-400">{opt.sub}</span>
                   </button>
                 ))}
               </div>
@@ -496,21 +595,39 @@ export function CropView({
               <p className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-zinc-400 mb-2.5 hidden md:block">
                 // QUICK_ACTIONS
               </p>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-4 gap-1.5">
                 <button
                   type="button"
-                  onClick={() => setQuad(createFullQuad())}
-                  className="h-10 px-2 border border-zinc-200 bg-white hover:bg-zinc-900 hover:text-white hover:border-zinc-900 font-mono text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  onClick={handleAutoDetect}
+                  className="h-10 px-1.5 border border-zinc-200 bg-white hover:bg-zinc-900 hover:text-white hover:border-zinc-900 font-mono text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer"
                 >
-                  <Maximize2 size={13} />
+                  <Sparkles size={12} />
+                  Auto
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuad(createFullQuad());
+                    setQuadSource('manual');
+                  }}
+                  className="h-10 px-1.5 border border-zinc-200 bg-white hover:bg-zinc-900 hover:text-white hover:border-zinc-900 font-mono text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                >
+                  <Maximize2 size={12} />
                   Full
                 </button>
                 <button
                   type="button"
-                  onClick={() => setQuad(createDefaultQuad(0.05))}
-                  className="h-10 px-2 border border-zinc-200 bg-white hover:bg-zinc-900 hover:text-white hover:border-zinc-900 font-mono text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  onClick={() => {
+                    setQuad(
+                      fallbackQuad
+                        ? (fallbackQuad.map((p) => ({ ...p })) as Quad)
+                        : createDefaultQuad(0.05)
+                    );
+                    setQuadSource(fallbackQuad ? 'guide' : 'manual');
+                  }}
+                  className="h-10 px-1.5 border border-zinc-200 bg-white hover:bg-zinc-900 hover:text-white hover:border-zinc-900 font-mono text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer"
                 >
-                  <RotateCcw size={13} />
+                  <RotateCcw size={12} />
                   Reset
                 </button>
                 <button
@@ -520,13 +637,13 @@ export function CropView({
                     setRotatePulse(true);
                     window.setTimeout(() => setRotatePulse(false), 450);
                   }}
-                  className={`h-10 px-2 border font-mono text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                  className={`h-10 px-1.5 border font-mono text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer ${
                     rotatePulse
                       ? 'bg-zinc-900 text-white border-zinc-900'
                       : 'border-zinc-200 bg-white hover:bg-zinc-900 hover:text-white hover:border-zinc-900'
                   }`}
                 >
-                  <RotateCw size={13} className={rotatePulse ? 'animate-rotate-beat' : ''} />
+                  <RotateCw size={12} className={rotatePulse ? 'animate-rotate-beat' : ''} />
                   {rotation}°
                 </button>
               </div>
@@ -534,7 +651,8 @@ export function CropView({
 
             <p className="hidden md:block text-xs text-zinc-500 leading-relaxed border-t border-zinc-100 pt-4">
               Place each corner handle on the 4 corners of your page. Use{' '}
-              <strong className="text-zinc-800">A4</strong> for tilted shots.
+              <strong className="text-zinc-800">A4</strong> for tilted shots or{' '}
+              <strong className="text-zinc-800">Auto</strong> to re-snap paper borders.
             </p>
           </div>
 
