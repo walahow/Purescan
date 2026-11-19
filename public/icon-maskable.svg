@@ -1,14 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
   <rect width="512" height="512" fill="#18181b"/>
-  <!-- Safe-zone centered icon for maskable PWA icons -->
-  <path d="M128 192V128H192" stroke="#ffffff" stroke-width="16" stroke-linecap="square"/>
-  <path d="M320 128H384V192" stroke="#ffffff" stroke-width="16" stroke-linecap="square"/>
-  <path d="M128 320V384H192" stroke="#ffffff" stroke-width="16" stroke-linecap="square"/>
-  <path d="M384 320V384H320" stroke="#ffffff" stroke-width="16" stroke-linecap="square"/>
-  <polygon points="196,168 292,168 324,200 324,344 196,344" fill="#ffffff"/>
-  <polygon points="292,168 324,200 292,200" fill="#d4d4d8"/>
-  <rect x="216" y="220" width="84" height="10" fill="#18181b"/>
-  <rect x="216" y="246" width="68" height="8" fill="#71717a"/>
-  <rect x="216" y="268" width="84" height="8" fill="#71717a"/>
-  <rect x="164" y="252" width="184" height="8" fill="#2eb846"/>
+  <!-- Subtle architectural grid lines -->
+  <path d="M146 190H366M146 322H366M190 146V366M322 146V366" stroke="#27272a" stroke-width="2"/>
+  <!-- Registration viewfinder corner brackets (identical safe-zone scale for zero splash jump) -->
+  <path d="M146 198V146H198" stroke="#ffffff" stroke-width="16" stroke-linecap="square"/>
+  <path d="M314 146H366V198" stroke="#ffffff" stroke-width="16" stroke-linecap="square"/>
+  <path d="M146 314V366H198" stroke="#ffffff" stroke-width="16" stroke-linecap="square"/>
+  <path d="M366 314V366H314" stroke="#ffffff" stroke-width="16" stroke-linecap="square"/>
+  <!-- Horizontal scan axis wings -->
+  <line x1="158" y1="256" x2="188" y2="256" stroke="#a1a1aa" stroke-width="8" stroke-linecap="square"/>
+  <line x1="324" y1="256" x2="354" y2="256" stroke="#a1a1aa" stroke-width="8" stroke-linecap="square"/>
+  <!-- Outer subtle diamond halo -->
+  <polygon points="256,174 338,256 256,338 174,256" stroke="#3f3f46" stroke-width="8" fill="none"/>
+  <!-- Crisp hollow diamond node -->
+  <polygon points="256,192 320,256 256,320 192,256" stroke="#ffffff" stroke-width="18" fill="#18181b"/>
+  <!-- Center reticle diamond -->
+  <polygon points="256,238 274,256 256,274 238,256" fill="#ffffff"/>
 </svg>

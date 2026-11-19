@@ -18,7 +18,7 @@ export function ToastBanner({ toast, onDismiss }: ToastBannerProps) {
     toast.kind === 'error'
       ? 'border-red-300 bg-red-50 text-red-900'
       : toast.kind === 'success'
-        ? 'border-emerald-300 bg-emerald-50 text-emerald-950'
+        ? 'border-zinc-900 bg-zinc-900 text-white'
         : 'border-zinc-300 bg-white text-zinc-900';
 
   const Icon =
@@ -28,7 +28,7 @@ export function ToastBanner({ toast, onDismiss }: ToastBannerProps) {
     toast.kind === 'error'
       ? 'text-red-600'
       : toast.kind === 'success'
-        ? 'text-emerald-600'
+        ? 'text-white'
         : 'text-zinc-700';
 
   return (

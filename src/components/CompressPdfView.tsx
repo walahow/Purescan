@@ -184,7 +184,6 @@ export function CompressPdfView({
 
       const sampleBytes = await doc.save({ useObjectStreams: false });
       await loadPdfFromBytes(sampleBytes, 'Sample_Report_With_Photos.pdf');
-      onNotify('info', 'Loaded local sample 2-page PDF (text + embedded images).');
     } catch (err) {
       setInspectError(err instanceof Error ? err.message : 'Could not build sample PDF.');
     } finally {
@@ -231,15 +230,13 @@ export function CompressPdfView({
     const built = result ?? (await runCompression());
     if (!built) return;
     downloadPdf(built.blob, built.filename);
-    onNotify('success', `Saved ${built.filename} (${formatBytes(built.compressedBytes)})`);
   };
 
   const handleShare = async () => {
     const built = result ?? (await runCompression());
     if (!built) return;
     try {
-      const status = await sharePdf(built.blob, built.filename);
-      if (status === 'shared') onNotify('success', `Shared ${built.filename}`);
+      await sharePdf(built.blob, built.filename);
     } catch {
       onNotify('error', 'Share unavailable on this browser — downloading instead.');
       downloadPdf(built.blob, built.filename);
@@ -317,12 +314,12 @@ export function CompressPdfView({
         </div>
       )}
 
-      <div className="mx-auto w-full max-w-2xl px-4 md:px-6 pt-5 md:pt-8">
+      <div className="mx-auto w-full max-w-2xl px-4 md:px-6 pt-7 md:pt-10">
         {/* Section Rule */}
-        <div className="flex items-center gap-3 mb-5">
+        <div className="flex items-center gap-3 mb-7">
           <div className="h-px flex-1 bg-zinc-200" />
           <span className="text-[10px] md:text-xs font-mono font-medium text-zinc-400 uppercase tracking-widest text-center px-2">
-            CLIENT_SIDE_PDF_COMPRESSOR · ZERO_UPLOAD
+            PDF_COMPRESSOR
           </span>
           <div className="h-px flex-1 bg-zinc-200" />
         </div>
@@ -335,47 +332,47 @@ export function CompressPdfView({
               <div className="absolute top-1 left-4 w-px h-5 bg-zinc-900" />
               <div className="absolute top-1 right-4 w-px h-5 bg-zinc-900" />
 
-              <div className="p-5 sm:p-7">
-                <div className="flex flex-col items-center text-center mb-5">
-                  <div className="h-11 w-11 border border-zinc-200 bg-zinc-50 flex items-center justify-center mb-2.5">
+              <div className="p-6 sm:p-9">
+                <div className="flex flex-col items-center text-center mb-7">
+                  <div className="h-11 w-11 border border-zinc-200 bg-zinc-50 flex items-center justify-center mb-3.5">
                     <FileArchive size={20} className="text-zinc-900" />
                   </div>
-                  <p className="font-mono text-[10px] font-bold uppercase tracking-[0.28em] text-zinc-400 mb-1">
+                  <p className="font-mono text-[10px] font-bold uppercase tracking-[0.28em] text-zinc-400 mb-1.5">
                     // IN_PLACE_XOBJECT_ENGINE
                   </p>
-                  <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight text-zinc-900 mb-1.5">
-                    Compress existing PDFs privately.
+                  <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight text-zinc-900 mb-2">
+                    Compress existing PDFs.
                   </h1>
-                  <p className="text-xs sm:text-sm text-zinc-500 max-w-md leading-relaxed">
-                    Recompresses embedded images directly inside your PDF in the browser — keeping
-                    selectable text, links, and vector layout intact with zero server uploads.
+                  <p className="text-xs sm:text-sm text-zinc-500 max-w-sm leading-relaxed">
+                    Shrink embedded images while keeping selectable text and vectors intact.
                   </p>
                 </div>
 
-                {/* Primary Dropzone Button */}
+                {/* Primary Dropzone Button with HYDE Bayer Dither */}
                 <button
                   type="button"
                   disabled={inspecting || generatingSample}
                   onClick={() => fileInputRef.current?.click()}
-                  className="w-full border-2 border-dashed border-zinc-300 bg-zinc-50/70 hover:border-zinc-900 hover:bg-zinc-50 py-8 px-5 flex flex-col items-center justify-center gap-2.5 transition-colors cursor-pointer disabled:opacity-50"
+                  className="group relative overflow-hidden w-full border-2 border-dashed border-zinc-300 bg-zinc-50/70 hover:border-zinc-900 hover:bg-white py-9 px-5 flex flex-col items-center justify-center gap-2.5 transition-colors cursor-pointer disabled:opacity-50"
                 >
+                  <div className="pointer-events-none absolute inset-0 bayer-dither-fade opacity-35 group-hover:opacity-80 transition-opacity duration-300" />
                   {inspecting ? (
                     <>
-                      <Loader2 size={24} className="animate-spin text-zinc-900" />
-                      <span className="font-mono text-xs font-bold uppercase tracking-widest text-zinc-900">
-                        Inspecting PDF structure locally...
+                      <Loader2 size={24} className="relative z-10 animate-spin text-zinc-900" />
+                      <span className="relative z-10 font-mono text-xs font-bold uppercase tracking-widest text-zinc-900">
+                        Inspecting PDF structure...
                       </span>
                     </>
                   ) : (
                     <>
-                      <div className="h-10 w-10 bg-zinc-900 text-white flex items-center justify-center">
-                        <Upload size={18} className="text-[#8ee069]" />
+                      <div className="relative z-10 h-10 w-10 bg-zinc-900 text-white flex items-center justify-center">
+                        <Upload size={18} className="text-white" />
                       </div>
-                      <span className="font-mono text-xs font-bold uppercase tracking-[0.18em] text-zinc-900">
+                      <span className="relative z-10 font-mono text-xs font-bold uppercase tracking-[0.18em] text-zinc-900">
                         Select or Drop .PDF File
                       </span>
-                      <span className="font-mono text-[10px] text-zinc-400">
-                        Processed in browser RAM · Never leaves your device
+                      <span className="relative z-10 font-mono text-[10px] text-zinc-400">
+                        On-device · Never uploaded
                       </span>
                     </>
                   )}
@@ -387,25 +384,25 @@ export function CompressPdfView({
                   </div>
                 )}
 
-                {/* Highlights */}
-                <div className="mt-5 pt-4 border-t border-zinc-100 grid grid-cols-3 gap-3 text-center">
+                {/* Selling Points */}
+                <div className="mt-6 pt-5 border-t border-zinc-100 grid grid-cols-3 gap-3 text-center">
                   <div>
-                    <Type size={14} className="mx-auto mb-0.5 text-[#2eb846]" />
-                    <p className="font-mono text-[10px] font-bold uppercase text-zinc-800">
+                    <Type size={14} className="mx-auto mb-1 text-zinc-900" />
+                    <p className="font-mono text-[10px] font-bold uppercase text-zinc-900">
                       Text Preserved
                     </p>
                     <p className="text-[11px] text-zinc-400">Selectable &amp; sharp</p>
                   </div>
                   <div>
-                    <Gauge size={14} className="mx-auto mb-0.5 text-zinc-800" />
-                    <p className="font-mono text-[10px] font-bold uppercase text-zinc-800">
+                    <Gauge size={14} className="mx-auto mb-1 text-zinc-900" />
+                    <p className="font-mono text-[10px] font-bold uppercase text-zinc-900">
                       Target Size
                     </p>
                     <p className="text-[11px] text-zinc-400">Fit 200 KB–2 MB</p>
                   </div>
                   <div>
-                    <ShieldCheck size={14} className="mx-auto mb-0.5 text-zinc-800" />
-                    <p className="font-mono text-[10px] font-bold uppercase text-zinc-800">
+                    <ShieldCheck size={14} className="mx-auto mb-1 text-zinc-900" />
+                    <p className="font-mono text-[10px] font-bold uppercase text-zinc-900">
                       Zero Upload
                     </p>
                     <p className="text-[11px] text-zinc-400">Works offline</p>
@@ -413,7 +410,7 @@ export function CompressPdfView({
                 </div>
 
                 {/* 1-Click Sample Generator */}
-                <div className="mt-4 pt-3 border-t border-zinc-100 text-center">
+                <div className="mt-5 pt-4 border-t border-zinc-100 text-center">
                   <button
                     type="button"
                     disabled={generatingSample || inspecting}
@@ -421,8 +418,8 @@ export function CompressPdfView({
                     className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-500 hover:text-zinc-900 underline decoration-zinc-300 underline-offset-4 transition-colors cursor-pointer disabled:opacity-40"
                   >
                     {generatingSample
-                      ? 'Building sample 2-page PDF locally...'
-                      : 'Need a test file? Generate sample 2-page PDF (text + images) →'}
+                      ? 'Building sample PDF...'
+                      : 'Generate sample 2-page PDF →'}
                   </button>
                 </div>
               </div>
@@ -494,7 +491,7 @@ export function CompressPdfView({
                   </div>
                   <div className="bg-white border border-zinc-200 px-2.5 py-1.5 col-span-2 sm:col-span-1">
                     <span className="block text-[9px] text-zinc-400 uppercase">Text &amp; Vectors</span>
-                    <span className="font-bold text-emerald-700">100% Preserved</span>
+                    <span className="font-bold text-zinc-900">100% Preserved</span>
                   </div>
                 </div>
 
@@ -699,7 +696,7 @@ export function CompressPdfView({
                   className={`border p-4 space-y-2.5 ${
                     result.targetMet === false
                       ? 'border-amber-300 bg-amber-50'
-                      : 'border-emerald-200 bg-emerald-50'
+                      : 'border-zinc-900 bg-zinc-50'
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2">
@@ -707,7 +704,7 @@ export function CompressPdfView({
                       {result.targetMet === false ? (
                         <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
                       ) : (
-                        <CheckCircle2 size={18} className="text-emerald-600 shrink-0 mt-0.5" />
+                        <CheckCircle2 size={18} className="text-zinc-900 shrink-0 mt-0.5" />
                       )}
                       <div className="min-w-0">
                         <p className="font-mono text-xs font-bold text-zinc-900 truncate">
@@ -716,7 +713,7 @@ export function CompressPdfView({
                         <p className="font-mono text-xs text-zinc-800 mt-0.5">
                           {formatBytes(result.originalBytes)} →{' '}
                           <strong>{formatBytes(result.compressedBytes)}</strong>{' '}
-                          <span className="font-bold text-emerald-700">
+                          <span className="font-bold text-zinc-900">
                             ({formatSavingsPercent(result.originalBytes, result.compressedBytes)})
                           </span>
                         </p>
@@ -734,7 +731,7 @@ export function CompressPdfView({
                             ? 'text-zinc-700 border-zinc-300'
                             : result.targetMet === false
                               ? 'text-amber-700 border-amber-300'
-                              : 'text-emerald-700 border-emerald-300'
+                              : 'text-zinc-900 border-zinc-900'
                         }`}
                       >
                         {result.alreadyOptimal
@@ -745,7 +742,7 @@ export function CompressPdfView({
                               ? 'UNDER CAP'
                               : 'COMPRESSED'}
                       </span>
-                      <span className="font-mono text-[9px] font-bold text-emerald-700">
+                      <span className="font-mono text-[9px] font-bold text-zinc-700">
                         TEXT PRESERVED
                       </span>
                     </div>
@@ -790,12 +787,12 @@ export function CompressPdfView({
                       {compressing ? (
                         <>
                           <Loader2 size={15} className="animate-spin" />
-                          Compressing Locally...
+                          Compressing...
                         </>
                       ) : (
                         <>
                           <FileArchive size={15} />
-                          Compress PDF Locally
+                          Compress PDF
                         </>
                       )}
                     </CornerTickButton>

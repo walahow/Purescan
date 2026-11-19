@@ -54,6 +54,7 @@ export function CropView({
   const [aspectMode, setAspectMode] = useState<AspectMode>(initialAspect);
   const [rotation, setRotation] = useState<Rotation>(initialRotation);
   const [activeDrag, setActiveDrag] = useState<DragTarget | null>(null);
+  const [rotatePulse, setRotatePulse] = useState(false);
   const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
   const [layout, setLayout] = useState<ImageLayout | null>(null);
 
@@ -146,7 +147,7 @@ export function CropView({
     const lpPrev = toLoupe(prevPt);
     const lpNext = toLoupe(nextPt);
 
-    ctx.strokeStyle = '#2eb846';
+    ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(lpPrev.x, lpPrev.y);
@@ -169,7 +170,7 @@ export function CropView({
     ctx.lineTo(mid, mid + 16);
     ctx.stroke();
 
-    ctx.fillStyle = '#2eb846';
+    ctx.fillStyle = '#ffffff';
     ctx.fillRect(mid - 2, mid - 2, 4, 4);
     ctx.restore();
   }, [activeDrag, imgEl, quad]);
@@ -369,7 +370,7 @@ export function CropView({
                 <polygon
                   points={stagePts.map((p) => `${p.x},${p.y}`).join(' ')}
                   fill="none"
-                  stroke="#2eb846"
+                  stroke="#ffffff"
                   strokeWidth="2.5"
                 />
               </svg>
@@ -386,7 +387,7 @@ export function CropView({
                   aria-label={`Drag edge ${idx + 1}`}
                   className="absolute -translate-x-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center cursor-move touch-none z-10"
                 >
-                  <div className="w-3.5 h-3.5 bg-white/90 border-2 border-[#2eb846] shadow-md rotate-45" />
+                  <div className="w-3.5 h-3.5 bg-white border-2 border-zinc-900 shadow-md rotate-45" />
                 </div>
               ))}
 
@@ -406,8 +407,8 @@ export function CropView({
                     <div
                       className={`w-7 h-7 rounded-full border-[2.5px] transition-transform flex items-center justify-center shadow-lg ${
                         isDraggingThis
-                          ? 'scale-125 bg-[#2eb846] border-white'
-                          : 'bg-white/95 border-[#2eb846]'
+                          ? 'scale-125 bg-zinc-900 border-white'
+                          : 'bg-white/95 border-zinc-900'
                       }`}
                     >
                       <span
@@ -433,7 +434,7 @@ export function CropView({
                     style={{ width: LOUPE_SIZE, height: LOUPE_SIZE }}
                     className="block"
                   />
-                  <span className="absolute bottom-1 right-1 bg-zinc-950/80 px-1.5 py-0.5 font-mono text-[9px] font-bold text-[#8ee069]">
+                  <span className="absolute bottom-1 right-1 bg-zinc-950/85 px-1.5 py-0.5 font-mono text-[9px] font-bold text-white">
                     {CORNER_LABELS[activeDrag.index]} · 2.6×
                   </span>
                 </div>
@@ -514,19 +515,26 @@ export function CropView({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setRotation(((rotation + 90) % 360) as Rotation)}
-                  className="h-10 px-2 border border-zinc-200 bg-white hover:bg-zinc-900 hover:text-white hover:border-zinc-900 font-mono text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  onClick={() => {
+                    setRotation(((rotation + 90) % 360) as Rotation);
+                    setRotatePulse(true);
+                    window.setTimeout(() => setRotatePulse(false), 450);
+                  }}
+                  className={`h-10 px-2 border font-mono text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                    rotatePulse
+                      ? 'bg-zinc-900 text-white border-zinc-900'
+                      : 'border-zinc-200 bg-white hover:bg-zinc-900 hover:text-white hover:border-zinc-900'
+                  }`}
                 >
-                  <RotateCw size={13} />
+                  <RotateCw size={13} className={rotatePulse ? 'animate-rotate-beat' : ''} />
                   {rotation}°
                 </button>
               </div>
             </div>
 
             <p className="hidden md:block text-xs text-zinc-500 leading-relaxed border-t border-zinc-100 pt-4">
-              Place each green corner directly onto the 4 corners of your paper. Use{' '}
-              <strong className="text-zinc-800">A4</strong> if you shot the page at a steep tilt to
-              restore true document proportions.
+              Place each corner handle on the 4 corners of your page. Use{' '}
+              <strong className="text-zinc-800">A4</strong> for tilted shots.
             </p>
           </div>
 

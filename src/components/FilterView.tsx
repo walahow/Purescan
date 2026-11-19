@@ -46,6 +46,7 @@ export function FilterView({
   const [comparingOriginal, setComparingOriginal] = useState(false);
   const [zoomed, setZoomed] = useState(false);
   const [rendering, setRendering] = useState(true);
+  const [rotatePulse, setRotatePulse] = useState(false);
   const [previewDims, setPreviewDims] = useState<{ w: number; h: number } | null>(null);
 
   const srcBufferRef = useRef<{ pixels: Uint8ClampedArray; width: number; height: number } | null>(null);
@@ -205,7 +206,7 @@ export function FilterView({
         </button>
 
         <div className="flex items-center gap-2">
-          <Sparkles size={14} className="text-[#2eb846]" />
+          <Sparkles size={14} className="text-zinc-900" />
           <span className="font-mono text-[11px] font-bold uppercase tracking-[0.2em] text-zinc-900">
             ENHANCE_SCAN
           </span>
@@ -301,7 +302,7 @@ export function FilterView({
                 <p className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-zinc-400">
                   // PURE_FILTER_PRESET
                 </p>
-                <span className="font-mono text-[10px] font-bold text-[#2eb846]">
+                <span className="font-mono text-[10px] font-bold text-zinc-900">
                   {activePresetMeta?.code}
                 </span>
               </div>
@@ -327,7 +328,7 @@ export function FilterView({
                       <span className="flex items-center gap-1.5 font-mono text-[10px] md:text-[11px] font-bold uppercase tracking-wider">
                         <span
                           className={`hidden md:inline-block w-1.5 h-1.5 ${
-                            active ? 'bg-[#2eb846]' : 'bg-zinc-300'
+                            active ? 'bg-white' : 'bg-zinc-300'
                           }`}
                         />
                         {preset.label}
@@ -357,10 +358,18 @@ export function FilterView({
               </button>
               <button
                 type="button"
-                onClick={() => setRotation(((rotation + 90) % 360) as Rotation)}
-                className="h-10 border border-zinc-200 bg-white hover:bg-zinc-900 hover:text-white hover:border-zinc-900 font-mono text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                onClick={() => {
+                  setRotation(((rotation + 90) % 360) as Rotation);
+                  setRotatePulse(true);
+                  window.setTimeout(() => setRotatePulse(false), 450);
+                }}
+                className={`h-10 border font-mono text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                  rotatePulse
+                    ? 'bg-zinc-900 text-white border-zinc-900'
+                    : 'border-zinc-200 bg-white hover:bg-zinc-900 hover:text-white hover:border-zinc-900'
+                }`}
               >
-                <RotateCw size={13} />
+                <RotateCw size={13} className={rotatePulse ? 'animate-rotate-beat' : ''} />
                 Rotate
               </button>
               <button

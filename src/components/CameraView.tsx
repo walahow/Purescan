@@ -7,14 +7,12 @@ import {
   ImagePlus,
   Layers,
   RefreshCw,
-  Smartphone,
   X,
 } from 'lucide-react';
 
 interface CameraViewProps {
   onSingleCapture: (blob: Blob) => void;
   onBatchComplete: (blobs: Blob[]) => void;
-  onFallbackNativeCamera: () => void;
   onFallbackGallery: () => void;
   onClose: () => void;
 }
@@ -35,7 +33,6 @@ interface ImageCaptureLike {
 export function CameraView({
   onSingleCapture,
   onBatchComplete,
-  onFallbackNativeCamera,
   onFallbackGallery,
   onClose,
 }: CameraViewProps) {
@@ -77,14 +74,14 @@ export function CameraView({
         window.location.hostname !== '127.0.0.1'
       ) {
         setErrorMsg(
-          'Live browser camera requires HTTPS. You can still scan immediately using Native Camera or Import Photos below.'
+          'Live browser camera requires HTTPS. You can still import existing document photos below.'
         );
         return;
       }
 
       if (!navigator.mediaDevices?.getUserMedia) {
         setErrorMsg(
-          'Live camera streaming is not supported in this browser. Use Native Camera or Import Photos below.'
+          'Live camera streaming is not supported in this browser. Import existing photos below.'
         );
         return;
       }
@@ -120,12 +117,12 @@ export function CameraView({
         const name = err instanceof DOMException ? err.name : '';
         if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
           setErrorMsg(
-            'Camera permission was denied. Allow camera access in your browser settings, or use Native Camera / Import Photos below.'
+            'Camera permission was denied. Allow camera access in your browser settings, or import existing photos below.'
           );
         } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
           setErrorMsg('No camera detected on this device. You can import existing document photos below.');
         } else {
-          setErrorMsg('Unable to start live camera. Try Native Camera or Import Photos below.');
+          setErrorMsg('Unable to start live camera. Try importing photos below.');
         }
       }
     },
@@ -306,25 +303,14 @@ export function CameraView({
               // CAMERA_UNAVAILABLE
             </p>
             <p className="text-sm text-zinc-700 leading-relaxed mb-5">{errorMsg}</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => {
-                  stopStream();
-                  onFallbackNativeCamera();
-                }}
-                className="h-11 px-4 bg-zinc-900 text-white font-mono text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 hover:bg-zinc-800 cursor-pointer"
-              >
-                <Smartphone size={15} />
-                Native Camera
-              </button>
+            <div className="flex justify-center">
               <button
                 type="button"
                 onClick={() => {
                   stopStream();
                   onFallbackGallery();
                 }}
-                className="h-11 px-4 bg-white text-zinc-900 border border-zinc-300 font-mono text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 hover:bg-zinc-100 cursor-pointer"
+                className="w-full h-11 px-4 bg-zinc-900 text-white font-mono text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 hover:bg-zinc-800 cursor-pointer"
               >
                 <ImagePlus size={15} />
                 Import Photos
@@ -350,7 +336,7 @@ export function CameraView({
               <div className="absolute bottom-0 right-0 w-8 h-8 border-b-[3px] border-r-[3px] border-white" />
 
               {/* Subtle HYDE scanning beam */}
-              <div className="absolute inset-x-2 h-px bg-[#2eb846]/70 shadow-[0_0_12px_rgba(46,184,70,0.8)] animate-scan-line" />
+              <div className="absolute inset-x-2 h-px bg-white/80 shadow-[0_0_12px_rgba(255,255,255,0.85)] animate-scan-line" />
 
               <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 whitespace-nowrap bg-zinc-950/75 px-2.5 py-1 font-mono text-[10px] tracking-widest uppercase text-zinc-300">
                 {mode === 'batch'
@@ -415,28 +401,16 @@ export function CameraView({
             </span>
           </button>
 
-          {/* Right slot: Done button (Batch) OR Native Cam shortcut */}
+          {/* Right slot: Done button (Batch) */}
           <div className="w-24 flex items-center justify-end">
-            {batchBlobs.length > 0 ? (
+            {batchBlobs.length > 0 && (
               <button
                 type="button"
                 onClick={handleFinishBatch}
-                className="h-11 px-3.5 bg-[#2eb846] text-white font-mono text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5 hover:bg-emerald-500 transition-colors cursor-pointer"
+                className="h-11 px-3.5 bg-white text-zinc-950 font-mono text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5 hover:bg-zinc-200 transition-colors cursor-pointer"
               >
                 <Check size={15} strokeWidth={3} />
                 Done ({batchBlobs.length})
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  stopStream();
-                  onFallbackNativeCamera();
-                }}
-                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-white transition-colors cursor-pointer"
-              >
-                <Smartphone size={20} />
-                <span className="font-mono text-[9px] uppercase tracking-wider">Native</span>
               </button>
             )}
           </div>

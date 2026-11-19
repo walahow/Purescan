@@ -22,6 +22,8 @@ export default function App() {
     meta,
     loading,
     busyLabel,
+    rotatingPageIds,
+    filterAllProgress,
     storageWarning,
     thumbUrls,
     prepareSingleDraft,
@@ -29,6 +31,7 @@ export default function App() {
     addBatchBlobs,
     deletePage,
     movePage,
+    reorderPages,
     rotatePageQuick,
     applyFilterToAll,
     renameDocument,
@@ -47,7 +50,6 @@ export default function App() {
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [toast, setToast] = useState<ToastMessage | null>(null);
 
-  const nativeCamInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const toastTimerRef = useRef<number | null>(null);
 
@@ -83,7 +85,6 @@ export default function App() {
         setIncomingPdf(pdfFile);
         setAppMode('compress');
         setScreen('workspace');
-        notify('info', `Loaded ${pdfFile.name} in Compress PDF mode.`);
         return;
       }
 
@@ -101,11 +102,7 @@ export default function App() {
           setActiveDraft(draft);
           setScreen('crop');
         } else {
-          const added = await addBatchBlobs(imageFiles, 'pure-color');
-          notify(
-            'success',
-            `Added ${added} pages with Pure Color filter. Tap any page to trim corners or tune.`
-          );
+          await addBatchBlobs(imageFiles, 'pure-color');
         }
       } catch (err) {
         notify('error', err instanceof Error ? err.message : 'Could not decode image file.');
@@ -113,12 +110,6 @@ export default function App() {
     },
     [addBatchBlobs, notify, prepareSingleDraft]
   );
-
-  const handleNativeCamChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files ? Array.from(e.target.files) : [];
-    e.target.value = '';
-    if (files.length > 0) void handleIncomingFiles(files);
-  };
 
   const handleGalleryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files ? Array.from(e.target.files) : [];
@@ -146,8 +137,7 @@ export default function App() {
         setActiveDraft(draft);
         setScreen('crop');
       } else {
-        const added = await addBatchBlobs(blobs, 'pure-color');
-        notify('success', `Captured ${added} pages with Pure Color. Tap any page to trim.`);
+        await addBatchBlobs(blobs, 'pure-color');
       }
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Failed to process captured batch.');
@@ -168,11 +158,9 @@ export default function App() {
   const handleFilterSave = async (updated: PendingDraft) => {
     setSavingDraft(true);
     try {
-      const wasEdit = Boolean(updated.existingPageId);
       await commitDraft(updated);
       setActiveDraft(null);
       setScreen('workspace');
-      notify('success', wasEdit ? 'Scan page updated.' : 'Page added to document.');
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Failed to save scan page.');
     } finally {
@@ -193,17 +181,13 @@ export default function App() {
   const handleApplyFilterAll = async (filter: FilterPreset) => {
     try {
       await applyFilterToAll(filter);
-      notify('success', `Updated filter across all ${pages.length} pages.`);
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not update all pages.');
     }
   };
 
   const handleInstallApp = async () => {
-    const accepted = await promptInstall();
-    if (accepted) {
-      notify('success', 'PureScan installed — ready to use offline anytime!');
-    }
+    await promptInstall();
   };
 
   const handleLoadSamplePage = async () => {
@@ -221,15 +205,7 @@ export default function App() {
 
   return (
     <div className="relative min-h-screen w-full flex flex-col bg-[#f5f5f7] text-zinc-900 overflow-x-hidden">
-      {/* Hidden native camera & gallery file inputs */}
-      <input
-        ref={nativeCamInputRef}
-        type="file"
-        accept="image/*"
-        capture="environment"
-        onChange={handleNativeCamChange}
-        className="hidden"
-      />
+      {/* Hidden gallery file input */}
       <input
         ref={galleryInputRef}
         type="file"
@@ -257,7 +233,6 @@ export default function App() {
           setAppMode('scanner');
           void handleLoadSamplePage();
         }}
-        onExportPdf={() => setExportOpen(true)}
       />
 
       {/* Toast Notifications */}
@@ -277,10 +252,11 @@ export default function App() {
           documentTitle={meta.title}
           loading={loading}
           busyLabel={busyLabel}
+          rotatingPageIds={rotatingPageIds}
+          filterAllProgress={filterAllProgress}
           storageWarning={storageWarning}
           onRenameDocument={(title) => void renameDocument(title)}
           onOpenCamera={() => setScreen('camera')}
-          onTriggerNativeCamera={() => nativeCamInputRef.current?.click()}
           onTriggerGallery={() => galleryInputRef.current?.click()}
           onLoadSamplePage={() => void handleLoadSamplePage()}
           onDropFiles={(files) => void handleIncomingFiles(files)}
@@ -288,9 +264,9 @@ export default function App() {
           onEditCrop={handleEditPageCrop}
           onRotatePage={(id) => void rotatePageQuick(id)}
           onMovePage={(id, dir) => void movePage(id, dir)}
+          onReorderPages={(ids) => void reorderPages(ids)}
           onDeletePage={(id) => {
             void deletePage(id);
-            notify('info', 'Page removed.');
           }}
           onApplyFilterAll={(f) => void handleApplyFilterAll(f)}
           onRequestClearAll={() => setClearConfirmOpen(true)}
@@ -315,10 +291,6 @@ export default function App() {
         <CameraView
           onSingleCapture={(blob) => void handleSingleCameraCapture(blob)}
           onBatchComplete={(blobs) => void handleBatchCameraComplete(blobs)}
-          onFallbackNativeCamera={() => {
-            setScreen('workspace');
-            window.setTimeout(() => nativeCamInputRef.current?.click(), 50);
-          }}
           onFallbackGallery={() => {
             setScreen('workspace');
             window.setTimeout(() => galleryInputRef.current?.click(), 50);
@@ -383,7 +355,6 @@ export default function App() {
         onConfirm={async () => {
           setClearConfirmOpen(false);
           await clearAllPages();
-          notify('info', 'Workspace cleared — ready for a new scan.');
         }}
       />
     </div>

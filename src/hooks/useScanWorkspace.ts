@@ -90,6 +90,12 @@ export function useScanWorkspace() {
   });
   const [loading, setLoading] = useState(true);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
+  const [rotatingPageIds, setRotatingPageIds] = useState<Record<string, boolean>>({});
+  const [filterAllProgress, setFilterAllProgress] = useState<{
+    current: number;
+    total: number;
+    percent: number;
+  } | null>(null);
   const [storageWarning, setStorageWarning] = useState(false);
 
   // Thumbnail object URLs managed cleanly to avoid memory leaks
@@ -313,39 +319,79 @@ export function useScanWorkspace() {
     [pages]
   );
 
-  const rotatePageQuick = useCallback(
-    async (id: string) => {
-      const page = pages.find((p) => p.id === id);
-      if (!page) return;
-      const nextRot = (((page.rotation + 90) % 360) as Rotation);
-      setBusyLabel('Rotating page...');
-      try {
-        const rendered = await renderPageOutputs({
-          originalBlob: page.originalBlob,
-          quad: page.quad,
-          aspectMode: page.aspectMode,
-          rotation: nextRot,
-          filter: page.filter,
-          adjustments: page.adjustments,
-        });
-        const updated: ScanPage = { ...page, rotation: nextRot, ...rendered };
-        await dbSavePage(updated);
-        setPages((prev) => prev.map((p) => (p.id === id ? updated : p)));
-      } finally {
-        setBusyLabel(null);
+  const reorderPages = useCallback(
+    async (orderedIds: string[]) => {
+      const byId = new Map(pages.map((p) => [p.id, p]));
+      const ordered: ScanPage[] = [];
+      for (const id of orderedIds) {
+        const found = byId.get(id);
+        if (found) {
+          ordered.push(found);
+          byId.delete(id);
+        }
       }
+      for (const leftover of byId.values()) {
+        ordered.push(leftover);
+      }
+
+      const reindexed = ordered.map((p, i) => ({ ...p, order: i }));
+      setPages(reindexed);
+      await saveMultiplePages(reindexed);
     },
     [pages]
   );
 
+  const rotatePageQuick = useCallback(
+    async (id: string) => {
+      if (rotatingPageIds[id]) return;
+      const page = pages.find((p) => p.id === id);
+      if (!page) return;
+      const nextRot = (((page.rotation + 90) % 360) as Rotation);
+      setRotatingPageIds((prev) => ({ ...prev, [id]: true }));
+      try {
+        const [rendered] = await Promise.all([
+          renderPageOutputs({
+            originalBlob: page.originalBlob,
+            quad: page.quad,
+            aspectMode: page.aspectMode,
+            rotation: nextRot,
+            filter: page.filter,
+            adjustments: page.adjustments,
+          }),
+          new Promise<void>((resolve) => setTimeout(resolve, 480)),
+        ]);
+        const updated: ScanPage = { ...page, rotation: nextRot, ...rendered };
+        await dbSavePage(updated);
+        setPages((prev) => prev.map((p) => (p.id === id ? updated : p)));
+      } finally {
+        setRotatingPageIds((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+      }
+    },
+    [pages, rotatingPageIds]
+  );
+
   const applyFilterToAll = useCallback(
     async (filter: FilterPreset) => {
-      if (pages.length === 0) return;
+      if (pages.length === 0 || filterAllProgress) return;
       const updatedList: ScanPage[] = [];
+      const startedAt = Date.now();
+      setFilterAllProgress({
+        current: 1,
+        total: pages.length,
+        percent: Math.round((0.25 / pages.length) * 100),
+      });
       try {
         for (let i = 0; i < pages.length; i++) {
           const p = pages[i];
-          setBusyLabel(`Applying filter (${i + 1}/${pages.length})...`);
+          setFilterAllProgress({
+            current: i + 1,
+            total: pages.length,
+            percent: Math.round(((i + 0.25) / pages.length) * 100),
+          });
           const rendered = await renderPageOutputs({
             originalBlob: p.originalBlob,
             quad: p.quad,
@@ -357,13 +403,21 @@ export function useScanWorkspace() {
           const updated: ScanPage = { ...p, filter, ...rendered };
           await dbSavePage(updated);
           updatedList.push(updated);
+          setFilterAllProgress({
+            current: i + 1,
+            total: pages.length,
+            percent: Math.round(((i + 1) / pages.length) * 100),
+          });
         }
         setPages(updatedList.sort((a, b) => a.order - b.order));
+        const elapsed = Date.now() - startedAt;
+        const holdMs = Math.max(180, 550 - elapsed);
+        await new Promise<void>((resolve) => setTimeout(resolve, holdMs));
       } finally {
-        setBusyLabel(null);
+        setFilterAllProgress(null);
       }
     },
-    [pages]
+    [pages, filterAllProgress]
   );
 
   const renameDocument = useCallback(async (title: string) => {
@@ -406,6 +460,8 @@ export function useScanWorkspace() {
     meta,
     loading,
     busyLabel,
+    rotatingPageIds,
+    filterAllProgress,
     storageWarning,
     thumbUrls,
     prepareSingleDraft,
@@ -413,6 +469,7 @@ export function useScanWorkspace() {
     addBatchBlobs,
     deletePage,
     movePage,
+    reorderPages,
     rotatePageQuick,
     applyFilterToAll,
     renameDocument,

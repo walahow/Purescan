@@ -146,17 +146,13 @@ export function ExportModal({
     const built = result ?? (await runBuild());
     if (!built) return;
     downloadPdf(built.blob, built.filename);
-    onNotify('success', `Saved ${built.filename} (${formatBytes(built.byteSize)})`);
   };
 
   const handleShare = async () => {
     const built = result ?? (await runBuild());
     if (!built) return;
     try {
-      const status = await sharePdf(built.blob, built.filename);
-      if (status === 'shared') {
-        onNotify('success', `Shared ${built.filename}`);
-      }
+      await sharePdf(built.blob, built.filename);
     } catch {
       onNotify('error', 'Share failed on this browser — downloading instead.');
       downloadPdf(built.blob, built.filename);
@@ -456,7 +452,7 @@ export function ExportModal({
                   // TEXT_BW_CODEC
                 </p>
                 {pureBwCount > 0 && bwEncoding === 'auto' && (
-                  <span className="font-mono text-[9px] font-bold text-emerald-700">
+                  <span className="font-mono text-[9px] font-bold text-zinc-900">
                     {pureBwCount} Pure B&amp;W → 1-Bit Flate
                   </span>
                 )}
@@ -495,7 +491,7 @@ export function ExportModal({
               <div className="flex items-center justify-between font-mono text-[10px] font-bold uppercase text-zinc-700 gap-2">
                 <span className="flex items-center gap-1.5 truncate">
                   <Loader2 size={13} className="animate-spin shrink-0" />
-                  <span className="truncate">{progress.stage || 'Building PDF locally'}...</span>
+                  <span className="truncate">{progress.stage || 'Building PDF'}...</span>
                 </span>
                 <span className="shrink-0">
                   {progress.current} / {progress.total}
@@ -516,7 +512,7 @@ export function ExportModal({
               className={`border px-3.5 py-3 space-y-2 ${
                 result.targetMet === false
                   ? 'border-amber-300 bg-amber-50'
-                  : 'border-emerald-200 bg-emerald-50'
+                  : 'border-zinc-900 bg-zinc-50'
               }`}
             >
               <div className="flex items-start justify-between gap-2">
@@ -524,19 +520,19 @@ export function ExportModal({
                   {result.targetMet === false ? (
                     <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
                   ) : (
-                    <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+                    <CheckCircle2 size={16} className="text-zinc-900 shrink-0 mt-0.5" />
                   )}
                   <div className="min-w-0">
                     <p
                       className={`font-mono text-[11px] font-bold truncate ${
-                        result.targetMet === false ? 'text-amber-950' : 'text-emerald-950'
+                        result.targetMet === false ? 'text-amber-950' : 'text-zinc-900'
                       }`}
                     >
                       {result.filename}
                     </p>
                     <p
                       className={`font-mono text-[10px] ${
-                        result.targetMet === false ? 'text-amber-800' : 'text-emerald-800'
+                        result.targetMet === false ? 'text-amber-800' : 'text-zinc-700'
                       }`}
                     >
                       {formatBytes(result.sourceBytes)} →{' '}
@@ -552,7 +548,7 @@ export function ExportModal({
                   className={`font-mono text-[9px] font-bold uppercase tracking-widest border bg-white px-2 py-0.5 shrink-0 ${
                     result.targetMet === false
                       ? 'text-amber-700 border-amber-300'
-                      : 'text-emerald-700 border-emerald-300'
+                      : 'text-zinc-900 border-zinc-900'
                   }`}
                 >
                   {result.targetMet === false
