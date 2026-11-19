@@ -18,12 +18,13 @@ import {
   MAX_OUTPUT_DIM,
   rgbaToJpegBlob,
 } from '../imaging/ingest';
-import { detectDocumentQuad } from '../imaging/documentDetector';
+import { resolveCapturedQuad } from '../imaging/documentDetector';
 import { computeSharpnessScore } from '../imaging/sharpness';
 import { processImageInWorker } from '../imaging/workerClient';
 import {
   DEFAULT_ADJUSTMENTS,
   type AspectMode,
+  type CameraCaptureResult,
   type DocumentMeta,
   type FilterAdjustments,
   type FilterPreset,
@@ -109,6 +110,12 @@ export function useScanWorkspace() {
   // Thumbnail object URLs managed cleanly to avoid memory leaks
   const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
   const thumbCacheRef = useRef<Map<string, { blob: Blob; url: string }>>(new Map());
+  const pagesRef = useRef<ScanPage[]>([]);
+  const batchQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+
+  useEffect(() => {
+    pagesRef.current = pages;
+  }, [pages]);
 
   useEffect(() => {
     let active = true;
@@ -170,15 +177,20 @@ export function useScanWorkspace() {
   const prepareSingleDraft = useCallback(
     async (
       fileOrBlob: Blob,
-      options?: { fromCamera?: boolean; fallbackQuad?: Quad; suggestedAspectMode?: AspectMode }
+      options?: {
+        fromCamera?: boolean;
+        previewQuad?: Quad;
+        fallbackQuad?: Quad;
+        suggestedAspectMode?: AspectMode;
+      }
     ): Promise<PendingDraft> => {
       setBusyLabel('Detecting document edges...');
       try {
         const ingested = await ingestImageBlob(fileOrBlob, MAX_INGEST_DIM, 0.95);
         const probe = await blobToImageData(ingested.blob, 400);
-        const detection = detectDocumentQuad(probe.pixels, probe.width, probe.height, {
+        const detection = resolveCapturedQuad(probe.pixels, probe.width, probe.height, {
+          previewQuad: options?.previewQuad,
           fallbackQuad: options?.fallbackQuad,
-          hintQuad: options?.fallbackQuad,
           workingMaxDim: 400,
         });
         const sharpness = computeSharpnessScore(probe.pixels, probe.width, probe.height);
@@ -268,70 +280,105 @@ export function useScanWorkspace() {
   );
 
   /**
-   * Batch imports/adds multiple photos directly into the workspace (auto-cropped via
-   * document boundary detection and enhanced with Pure Color).
+   * Processes a single raw camera/file capture using its preview quad (or fallback guide)
+   * and immediately persists the cropped & enhanced ScanPage to IndexedDB and state.
+   */
+  const processAndSaveCapturedItem = useCallback(
+    async (
+      item: Blob | CameraCaptureResult,
+      defaultFilter: FilterPreset = 'pure-color'
+    ): Promise<ScanPage> => {
+      const rawBlob = item instanceof Blob ? item : item.blob;
+      const previewQuad = item instanceof Blob ? undefined : item.previewQuad;
+      const fallbackQuad = item instanceof Blob ? undefined : item.fallbackQuad;
+      const aspectMode = item instanceof Blob ? 'auto' : (item.suggestedAspectMode ?? 'auto');
+
+      const ingested = await ingestImageBlob(rawBlob, MAX_INGEST_DIM, 0.95);
+      const probe = await blobToImageData(ingested.blob, 400);
+      const detection = resolveCapturedQuad(probe.pixels, probe.width, probe.height, {
+        previewQuad,
+        fallbackQuad,
+        workingMaxDim: 400,
+      });
+      const quad = detection.quad;
+      const adjustments = { ...DEFAULT_ADJUSTMENTS };
+      const rendered = await renderPageOutputs({
+        originalBlob: ingested.blob,
+        quad,
+        aspectMode,
+        rotation: 0,
+        filter: defaultFilter,
+        adjustments,
+      });
+
+      const nextOrder = pagesRef.current.reduce((m, p) => Math.max(m, p.order), -1) + 1;
+      const page: ScanPage = {
+        id: generateId(),
+        order: nextOrder,
+        createdAt: Date.now(),
+        originalBlob: ingested.blob,
+        originalWidth: ingested.width,
+        originalHeight: ingested.height,
+        quad,
+        aspectMode,
+        rotation: 0,
+        filter: defaultFilter,
+        adjustments,
+        ...rendered,
+      };
+      await dbSavePage(page);
+      const updated = [...pagesRef.current, page].sort((a, b) => a.order - b.order);
+      pagesRef.current = updated;
+      setPages(updated);
+      setStorageWarning(isUsingMemoryFallback());
+      return page;
+    },
+    []
+  );
+
+  /**
+   * Immediately queues a single camera batch capture for cropping, enhancement, and saving
+   * right after it is taken (serialized so worker memory stays bounded and page order is exact).
+   */
+  const enqueueBatchCapture = useCallback(
+    (capture: CameraCaptureResult, defaultFilter: FilterPreset = 'pure-color'): Promise<ScanPage> => {
+      const task = batchQueueRef.current
+        .catch(() => undefined)
+        .then(() => processAndSaveCapturedItem(capture, defaultFilter));
+      batchQueueRef.current = task.catch(() => undefined);
+      return task;
+    },
+    [processAndSaveCapturedItem]
+  );
+
+  /** Waits for any in-flight immediate batch capture crop/save to finish committing. */
+  const awaitPendingBatchCaptures = useCallback(async () => {
+    await batchQueueRef.current.catch(() => undefined);
+  }, []);
+
+  /**
+   * Batch imports multiple files from gallery/drag-drop directly into the workspace.
    */
   const addBatchBlobs = useCallback(
     async (
-      items: Array<Blob | { blob: Blob; fallbackQuad?: Quad; suggestedAspectMode?: AspectMode }>,
+      items: Array<Blob | CameraCaptureResult>,
       defaultFilter: FilterPreset = 'pure-color'
     ): Promise<number> => {
       if (items.length === 0) return 0;
-      const newPages: ScanPage[] = [];
-      let nextOrder = pages.reduce((m, p) => Math.max(m, p.order), -1) + 1;
+      let savedCount = 0;
 
       try {
         for (let i = 0; i < items.length; i++) {
           setBusyLabel(`Auto-cropping page ${i + 1} of ${items.length}...`);
-          const item = items[i];
-          const rawBlob = item instanceof Blob ? item : item.blob;
-          const fallbackQuad = item instanceof Blob ? undefined : item.fallbackQuad;
-          const aspectMode = item instanceof Blob ? 'auto' : (item.suggestedAspectMode ?? 'auto');
-
-          const ingested = await ingestImageBlob(rawBlob, MAX_INGEST_DIM, 0.95);
-          const probe = await blobToImageData(ingested.blob, 400);
-          const detection = detectDocumentQuad(probe.pixels, probe.width, probe.height, {
-            fallbackQuad,
-            hintQuad: fallbackQuad,
-            workingMaxDim: 400,
-          });
-          const quad = detection.quad;
-          const adjustments = { ...DEFAULT_ADJUSTMENTS };
-          const rendered = await renderPageOutputs({
-            originalBlob: ingested.blob,
-            quad,
-            aspectMode,
-            rotation: 0,
-            filter: defaultFilter,
-            adjustments,
-          });
-
-          const page: ScanPage = {
-            id: generateId(),
-            order: nextOrder++,
-            createdAt: Date.now(),
-            originalBlob: ingested.blob,
-            originalWidth: ingested.width,
-            originalHeight: ingested.height,
-            quad,
-            aspectMode,
-            rotation: 0,
-            filter: defaultFilter,
-            adjustments,
-            ...rendered,
-          };
-          await dbSavePage(page);
-          newPages.push(page);
+          await processAndSaveCapturedItem(items[i], defaultFilter);
+          savedCount++;
         }
-
-        setPages((prev) => [...prev, ...newPages].sort((a, b) => a.order - b.order));
-        setStorageWarning(isUsingMemoryFallback());
-        return newPages.length;
+        return savedCount;
       } finally {
         setBusyLabel(null);
       }
     },
-    [pages]
+    [processAndSaveCapturedItem]
   );
 
   const deletePage = useCallback(async (id: string) => {
@@ -506,6 +553,8 @@ export function useScanWorkspace() {
     thumbUrls,
     prepareSingleDraft,
     commitDraft,
+    enqueueBatchCapture,
+    awaitPendingBatchCaptures,
     addBatchBlobs,
     deletePage,
     movePage,

@@ -4,6 +4,7 @@ import {
   Check,
   Flashlight,
   FlashlightOff,
+  Gauge,
   ImagePlus,
   Layers,
   RectangleHorizontal,
@@ -12,6 +13,13 @@ import {
   Smartphone,
   X,
 } from 'lucide-react';
+import {
+  computeDocumentExposureBias,
+  computeFastShutterPlan,
+  computeMeanLuminance,
+  formatShutterSpeed,
+  type NumericRangeCapability,
+} from '../imaging/cameraShutter';
 import {
   CAMERA_GUIDE_PRESETS,
   computeDocumentGuideQuad,
@@ -30,7 +38,9 @@ import type {
 
 interface CameraViewProps {
   onSingleCapture: (capture: CameraCaptureResult) => void;
-  onBatchComplete: (captures: CameraCaptureResult[]) => void;
+  /** Crops and saves each batch photo right after it is taken */
+  onBatchCapture: (capture: CameraCaptureResult) => Promise<{ thumbnailBlob?: Blob } | void>;
+  onBatchComplete: (savedCount: number) => Promise<void> | void;
   onFallbackGallery: () => void;
   onClose: () => void;
 }
@@ -50,22 +60,44 @@ interface ExtendedCapabilities extends MediaTrackCapabilities {
   torch?: boolean;
   focusMode?: string[];
   exposureMode?: string[];
+  exposureTime?: NumericRangeCapability;
+  iso?: NumericRangeCapability;
+  exposureCompensation?: NumericRangeCapability;
   pointsOfInterest?: unknown;
+}
+
+interface ExtendedSettings extends MediaTrackSettings {
+  exposureMode?: string;
+  exposureTime?: number;
+  iso?: number;
 }
 
 interface ExtendedConstraintSet {
   torch?: boolean;
   focusMode?: string;
   exposureMode?: string;
+  exposureTime?: number;
+  iso?: number;
+  exposureCompensation?: number;
   pointsOfInterest?: Array<{ x: number; y: number }>;
 }
 
-type ExtendedTrack = MediaStreamTrack & {
+type ExtendedTrack = Omit<
+  MediaStreamTrack,
+  'getCapabilities' | 'getSettings' | 'applyConstraints'
+> & {
   getCapabilities?: () => ExtendedCapabilities;
+  getSettings?: () => ExtendedSettings;
   applyConstraints: (
     constraints: MediaTrackConstraints & { advanced?: ExtendedConstraintSet[] }
   ) => Promise<void>;
 };
+
+interface PhotoSettingsLike {
+  imageWidth?: number;
+  imageHeight?: number;
+  fillLightMode?: 'auto' | 'off' | 'flash';
+}
 
 interface PhotoCapabilitiesLike {
   imageWidth?: { min?: number; max?: number; step?: number };
@@ -74,11 +106,7 @@ interface PhotoCapabilitiesLike {
 }
 
 interface ImageCaptureLike {
-  takePhoto: (settings?: {
-    imageWidth?: number;
-    imageHeight?: number;
-    fillLightMode?: 'auto' | 'off' | 'flash';
-  }) => Promise<Blob>;
+  takePhoto: (settings?: PhotoSettingsLike) => Promise<Blob>;
   getPhotoCapabilities?: () => Promise<PhotoCapabilitiesLike>;
 }
 
@@ -109,6 +137,7 @@ function getPreferredVideoConstraints(
 
 export function CameraView({
   onSingleCapture,
+  onBatchCapture,
   onBatchComplete,
   onFallbackGallery,
   onClose,
@@ -133,8 +162,21 @@ export function CameraView({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [torchSupported, setTorchSupported] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
+  const [shutterPrioritySupported, setShutterPrioritySupported] = useState(false);
+  const [fastShutterOn, setFastShutterOn] = useState(true);
+  const [shutterSpeedLabel, setShutterSpeedLabel] = useState<string | null>(null);
   const [shutterFlash, setShutterFlash] = useState(false);
   const [capturing, setCapturing] = useState(false);
+
+  const trackCapsRef = useRef<ExtendedCapabilities | null>(null);
+  const manualShutterActiveRef = useRef(false);
+  const fastShutterOnRef = useRef(fastShutterOn);
+  fastShutterOnRef.current = fastShutterOn;
+  const shutterSettleTimerRef = useRef<number | null>(null);
+  const badExposureCountRef = useRef(0);
+  const cachedImageCaptureRef = useRef<ImageCaptureLike | null>(null);
+  const cachedPhotoBaseSettingsRef = useRef<PhotoSettingsLike | null>(null);
+  const cachedFillModesRef = useRef<string[]>([]);
 
   const [videoRect, setVideoRect] = useState<VideoRect | null>(null);
   const [liveQuad, setLiveQuad] = useState<Quad | null>(null);
@@ -142,13 +184,28 @@ export function CameraView({
   const [sharpnessStatus, setSharpnessStatus] = useState<SharpnessStatus>('fair');
   const [focusReticle, setFocusReticle] = useState<{ x: number; y: number } | null>(null);
 
-  const [batchCaptures, setBatchCaptures] = useState<CameraCaptureResult[]>([]);
+  const [batchCount, setBatchCount] = useState(0);
+  const [batchPendingCount, setBatchPendingCount] = useState(0);
+  const [finishingBatch, setFinishingBatch] = useState(false);
   const [lastThumbUrl, setLastThumbUrl] = useState<string | null>(null);
+  const batchThumbSeqRef = useRef(0);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const stopStream = useCallback(() => {
     if (focusResetTimerRef.current) {
       window.clearTimeout(focusResetTimerRef.current);
       focusResetTimerRef.current = null;
+    }
+    if (shutterSettleTimerRef.current) {
+      window.clearTimeout(shutterSettleTimerRef.current);
+      shutterSettleTimerRef.current = null;
     }
     if (streamRef.current) {
       for (const track of streamRef.current.getTracks()) {
@@ -156,11 +213,80 @@ export function CameraView({
       }
       streamRef.current = null;
     }
+    trackCapsRef.current = null;
+    manualShutterActiveRef.current = false;
+    badExposureCountRef.current = 0;
+    cachedImageCaptureRef.current = null;
+    cachedPhotoBaseSettingsRef.current = null;
+    cachedFillModesRef.current = [];
     setCameraReady(false);
     setTorchOn(false);
     setTorchSupported(false);
+    setShutterPrioritySupported(false);
+    setShutterSpeedLabel(null);
     setLiveQuad(null);
     liveQuadRef.current = null;
+  }, []);
+
+  /** Applies continuous AF + AE with subtle -0.3 EV bias for faster shutter & crisp paper ink. */
+  const applyContinuousDocumentExposure = useCallback(
+    async (track: ExtendedTrack, caps: ExtendedCapabilities) => {
+      const advanced: ExtendedConstraintSet[] = [];
+      if (Array.isArray(caps.focusMode) && caps.focusMode.includes('continuous')) {
+        advanced.push({ focusMode: 'continuous' });
+      }
+      if (Array.isArray(caps.exposureMode) && caps.exposureMode.includes('continuous')) {
+        advanced.push({ exposureMode: 'continuous' });
+      }
+      const evBias = computeDocumentExposureBias(caps.exposureCompensation, -0.3);
+      if (evBias !== undefined) {
+        advanced.push({ exposureCompensation: evBias });
+      }
+      manualShutterActiveRef.current = false;
+      badExposureCountRef.current = 0;
+      if (advanced.length > 0 && typeof track.applyConstraints === 'function') {
+        await track.applyConstraints({ advanced }).catch(() => undefined);
+      }
+    },
+    []
+  );
+
+  /** Locks <=1/100s (or <=1/60s ceiling) fast shutter with proportional ISO if hardware allows. */
+  const engageFastShutterPriority = useCallback(async (track: ExtendedTrack) => {
+    const caps = trackCapsRef.current;
+    if (!caps || !fastShutterOnRef.current || typeof track.getSettings !== 'function') return;
+    if (!Array.isArray(caps.exposureMode) || !caps.exposureMode.includes('manual')) return;
+
+    const settings = track.getSettings();
+    const expLabel = formatShutterSpeed(settings.exposureTime);
+    if (expLabel) setShutterSpeedLabel(expLabel);
+
+    const plan = computeFastShutterPlan({
+      currentExposure: settings.exposureTime,
+      currentIso: settings.iso,
+      exposureRange: caps.exposureTime,
+      isoRange: caps.iso,
+      targetExposure: 100, // 1/100s freezes indoor handheld text motion
+      maxExposure: 167,
+    });
+    if (!plan.canApply || plan.alreadyFast || !plan.exposureTime || !plan.iso) return;
+
+    try {
+      await track.applyConstraints({
+        advanced: [
+          {
+            exposureMode: 'manual',
+            exposureTime: plan.exposureTime,
+            iso: plan.iso,
+          },
+        ],
+      });
+      manualShutterActiveRef.current = true;
+      badExposureCountRef.current = 0;
+      if (plan.shutterLabel) setShutterSpeedLabel(plan.shutterLabel);
+    } catch {
+      manualShutterActiveRef.current = false;
+    }
   }, []);
 
   const recalcVideoRect = useCallback(() => {
@@ -240,20 +366,72 @@ export function CameraView({
         if (track && typeof track.getCapabilities === 'function') {
           try {
             const caps = track.getCapabilities() as ExtendedCapabilities;
+            trackCapsRef.current = caps;
             setTorchSupported(Boolean(caps?.torch));
 
-            const advanced: ExtendedConstraintSet[] = [];
-            if (Array.isArray(caps?.focusMode) && caps.focusMode.includes('continuous')) {
-              advanced.push({ focusMode: 'continuous' });
-            }
-            if (Array.isArray(caps?.exposureMode) && caps.exposureMode.includes('continuous')) {
-              advanced.push({ exposureMode: 'continuous' });
-            }
-            if (advanced.length > 0 && typeof track.applyConstraints === 'function') {
-              await track.applyConstraints({ advanced }).catch(() => undefined);
+            const canManualShutter = Boolean(
+              Array.isArray(caps?.exposureMode) &&
+                caps.exposureMode.includes('manual') &&
+                caps.exposureTime &&
+                caps.iso
+            );
+            setShutterPrioritySupported(canManualShutter);
+
+            await applyContinuousDocumentExposure(track, caps);
+
+            if (canManualShutter && fastShutterOnRef.current) {
+              shutterSettleTimerRef.current = window.setTimeout(() => {
+                if (mountedRef.current && streamRef.current === stream) {
+                  void engageFastShutterPriority(track);
+                }
+              }, 480);
             }
           } catch {
             setTorchSupported(false);
+            setShutterPrioritySupported(false);
+          }
+        }
+
+        // Pre-warm ImageCapture & cache full-res PhotoCapabilities so shutter has zero IPC wait
+        const ImageCaptureCtor = (
+          window as unknown as { ImageCapture?: new (t: MediaStreamTrack) => ImageCaptureLike }
+        ).ImageCapture;
+        if (track && typeof ImageCaptureCtor === 'function') {
+          try {
+            const ic = new ImageCaptureCtor(track as unknown as MediaStreamTrack);
+            cachedImageCaptureRef.current = ic;
+            if (typeof ic.getPhotoCapabilities === 'function') {
+              void ic
+                .getPhotoCapabilities()
+                .then((pCaps) => {
+                  if (!mountedRef.current || cachedImageCaptureRef.current !== ic) return;
+                  const base: PhotoSettingsLike = {};
+                  const maxW = pCaps.imageWidth?.max;
+                  const maxH = pCaps.imageHeight?.max;
+                  if (maxW && maxH) {
+                    const longest = Math.max(maxW, maxH);
+                    const cap = 4608;
+                    if (longest > cap) {
+                      const scale = cap / longest;
+                      base.imageWidth = Math.round(maxW * scale);
+                      base.imageHeight = Math.round(maxH * scale);
+                    } else {
+                      base.imageWidth = maxW;
+                      base.imageHeight = maxH;
+                    }
+                  } else {
+                    if (maxW) base.imageWidth = Math.min(4608, maxW);
+                    if (maxH) base.imageHeight = Math.min(4608, maxH);
+                  }
+                  cachedPhotoBaseSettingsRef.current = base;
+                  cachedFillModesRef.current = Array.isArray(pCaps.fillLightMode)
+                    ? pCaps.fillLightMode
+                    : [];
+                })
+                .catch(() => undefined);
+            }
+          } catch {
+            cachedImageCaptureRef.current = null;
           }
         }
         setCameraReady(true);
@@ -270,7 +448,7 @@ export function CameraView({
         }
       }
     },
-    [recalcVideoRect, stopStream]
+    [applyContinuousDocumentExposure, engageFastShutterPriority, recalcVideoRect, stopStream]
   );
 
   useEffect(() => {
@@ -331,6 +509,24 @@ export function CameraView({
           const sharp = computeSharpnessScore(img.data, w, h);
           setSharpnessStatus(sharp.status);
 
+          const activeTrack = streamRef.current?.getVideoTracks()[0] as ExtendedTrack | undefined;
+          if (activeTrack && typeof activeTrack.getSettings === 'function') {
+            const liveLabel = formatShutterSpeed(activeTrack.getSettings().exposureTime);
+            if (liveLabel) setShutterSpeedLabel(liveLabel);
+          }
+
+          if (manualShutterActiveRef.current && activeTrack && trackCapsRef.current) {
+            const meanLuma = computeMeanLuminance(img.data, 4);
+            if (meanLuma < 58 || meanLuma > 242) {
+              badExposureCountRef.current++;
+              if (badExposureCountRef.current >= 2) {
+                void applyContinuousDocumentExposure(activeTrack, trackCapsRef.current);
+              }
+            } else {
+              badExposureCountRef.current = 0;
+            }
+          }
+
           const guideFallback = computeDocumentGuideQuad(
             vw,
             vh,
@@ -344,7 +540,7 @@ export function CameraView({
           });
           if (det.detected) {
             missedFrames = 0;
-            const smoothed = smoothQuad(liveQuadRef.current, det.quad, 0.36);
+            const smoothed = smoothQuad(liveQuadRef.current, det.quad, 0.52);
             liveQuadRef.current = smoothed;
             setLiveQuad(smoothed);
           } else {
@@ -368,7 +564,7 @@ export function CameraView({
       canvas.width = 0;
       canvas.height = 0;
     };
-  }, [cameraReady, capturing, errorMsg]);
+  }, [applyContinuousDocumentExposure, cameraReady, capturing, errorMsg]);
 
   const toggleTorch = async () => {
     const track = streamRef.current?.getVideoTracks()[0] as ExtendedTrack | undefined;
@@ -377,8 +573,35 @@ export function CameraView({
       const next = !torchOn;
       await track.applyConstraints({ advanced: [{ torch: next }] });
       setTorchOn(next);
+      // Let AE adapt to new light level before re-locking fast shutter
+      if (trackCapsRef.current) {
+        await applyContinuousDocumentExposure(track, trackCapsRef.current);
+        if (shutterPrioritySupported && fastShutterOnRef.current) {
+          if (shutterSettleTimerRef.current) window.clearTimeout(shutterSettleTimerRef.current);
+          shutterSettleTimerRef.current = window.setTimeout(() => {
+            if (mountedRef.current) void engageFastShutterPriority(track);
+          }, 420);
+        }
+      }
     } catch {
       setTorchSupported(false);
+    }
+  };
+
+  const toggleFastShutter = async () => {
+    const track = streamRef.current?.getVideoTracks()[0] as ExtendedTrack | undefined;
+    if (!track || !shutterPrioritySupported || !trackCapsRef.current) return;
+    const next = !fastShutterOn;
+    setFastShutterOn(next);
+    fastShutterOnRef.current = next;
+    if (next) {
+      await applyContinuousDocumentExposure(track, trackCapsRef.current);
+      if (shutterSettleTimerRef.current) window.clearTimeout(shutterSettleTimerRef.current);
+      shutterSettleTimerRef.current = window.setTimeout(() => {
+        if (mountedRef.current) void engageFastShutterPriority(track);
+      }, 280);
+    } else {
+      await applyContinuousDocumentExposure(track, trackCapsRef.current);
     }
   };
 
@@ -442,6 +665,9 @@ export function CameraView({
     }
 
     const previewAspect = video.videoWidth / video.videoHeight;
+    const previewQuad = liveQuadRef.current
+      ? (liveQuadRef.current.map((p) => ({ ...p })) as Quad)
+      : undefined;
     const currentGuideId = guideIdRef.current;
     const currentPreset =
       CAMERA_GUIDE_PRESETS.find((g) => g.id === currentGuideId) ?? CAMERA_GUIDE_PRESETS[0];
@@ -456,45 +682,18 @@ export function CameraView({
     const stream = streamRef.current;
     const track = stream?.getVideoTracks()[0];
 
-    // 1. Prefer full-sensor ImageCapture.takePhoto() when available (Android Chrome)
-    const ImageCaptureCtor = (
-      window as unknown as { ImageCapture?: new (t: MediaStreamTrack) => ImageCaptureLike }
-    ).ImageCapture;
-
-    if (track && typeof ImageCaptureCtor === 'function') {
+    // 1. Prefer cached full-sensor ImageCapture.takePhoto() with zero per-tap capabilities stall
+    const ic = cachedImageCaptureRef.current;
+    if (track && ic) {
       try {
-        const ic = new ImageCaptureCtor(track);
         let photoBlob: Blob | null = null;
-
-        if (typeof ic.getPhotoCapabilities === 'function') {
+        const base = cachedPhotoBaseSettingsRef.current;
+        if (base) {
           try {
-            const pCaps = await ic.getPhotoCapabilities();
-            const settings: {
-              imageWidth?: number;
-              imageHeight?: number;
-              fillLightMode?: 'auto' | 'off' | 'flash';
-            } = {};
-            const maxW = pCaps.imageWidth?.max;
-            const maxH = pCaps.imageHeight?.max;
-            if (maxW && maxH) {
-              const longest = Math.max(maxW, maxH);
-              const cap = 4608; // Keep native sensor aspect ratio (e.g. 4000x3000 or 4608x3456)
-              if (longest > cap) {
-                const scale = cap / longest;
-                settings.imageWidth = Math.round(maxW * scale);
-                settings.imageHeight = Math.round(maxH * scale);
-              } else {
-                settings.imageWidth = maxW;
-                settings.imageHeight = maxH;
-              }
-            } else {
-              if (maxW) settings.imageWidth = Math.min(4608, maxW);
-              if (maxH) settings.imageHeight = Math.min(4608, maxH);
-            }
-            if (Array.isArray(pCaps.fillLightMode)) {
-              if (torchOn && pCaps.fillLightMode.includes('flash')) settings.fillLightMode = 'flash';
-              else if (pCaps.fillLightMode.includes('off')) settings.fillLightMode = 'off';
-            }
+            const settings: PhotoSettingsLike = { ...base };
+            const fillModes = cachedFillModesRef.current;
+            if (torchOn && fillModes.includes('flash')) settings.fillLightMode = 'flash';
+            else if (fillModes.includes('off')) settings.fillLightMode = 'off';
             photoBlob = await ic.takePhoto(settings);
           } catch {
             // Some Android drivers reject PhotoSettings — retry bare takePhoto()
@@ -507,22 +706,28 @@ export function CameraView({
 
         if (photoBlob && photoBlob.size > 0) {
           // Ensure captured photo matches the exact live preview framing 1:1
-          const syncedBlob = await cropBlobToAspectRatio(photoBlob, previewAspect, 0.95);
-          return { blob: syncedBlob, fallbackQuad, suggestedAspectMode };
+          const syncedBlob = await cropBlobToAspectRatio(photoBlob, previewAspect, 0.97);
+          return { blob: syncedBlob, previewQuad, fallbackQuad, suggestedAspectMode };
         }
       } catch {
-        // Fall through to multi-frame sharpest burst capture
+        // Fall through to fast sharpest-frame burst capture
       }
     }
 
-    // 2. Sharpest-frame burst fallback (4 frames spaced 45ms apart — protects iOS Safari & desktop)
+    // 2. Fast sharpest-frame burst fallback (2-3 frames spaced 18ms, single JPEG 0.97 encode)
     const vw = video.videoWidth;
     const vh = video.videoHeight;
-    const canvas = document.createElement('canvas');
-    canvas.width = vw;
-    canvas.height = vh;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) throw new Error('Canvas unavailable.');
+    const workCanvas = document.createElement('canvas');
+    workCanvas.width = vw;
+    workCanvas.height = vh;
+    const workCtx = workCanvas.getContext('2d', { willReadFrequently: true });
+    if (!workCtx) throw new Error('Canvas unavailable.');
+
+    const bestCanvas = document.createElement('canvas');
+    bestCanvas.width = vw;
+    bestCanvas.height = vh;
+    const bestCtx = bestCanvas.getContext('2d');
+    if (!bestCtx) throw new Error('Canvas unavailable.');
 
     const probeCanvas = document.createElement('canvas');
     const pScale = Math.min(1, 280 / Math.max(vw, vh));
@@ -534,44 +739,89 @@ export function CameraView({
     let bestScore = -1;
 
     try {
-      const frameCount = 5;
+      const frameCount = 3;
       for (let i = 0; i < frameCount; i++) {
         if (i > 0) {
-          await new Promise<void>((resolve) => window.setTimeout(resolve, 35));
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 18));
         }
 
+        workCtx.drawImage(video, 0, 0, vw, vh);
         let score = 0;
+        let isSharp = false;
         if (pCtx) {
-          pCtx.drawImage(video, 0, 0, probeCanvas.width, probeCanvas.height);
+          pCtx.drawImage(workCanvas, 0, 0, probeCanvas.width, probeCanvas.height);
           const pData = pCtx.getImageData(0, 0, probeCanvas.width, probeCanvas.height);
-          score = computeSharpnessScore(pData.data, probeCanvas.width, probeCanvas.height).score;
+          const report = computeSharpnessScore(pData.data, probeCanvas.width, probeCanvas.height);
+          score = report.score;
+          isSharp = report.status === 'sharp';
         }
 
-        if (score >= bestScore || !bestBlob) {
+        if (score >= bestScore) {
           bestScore = score;
-          ctx.drawImage(video, 0, 0, vw, vh);
-          bestBlob = await new Promise<Blob>((resolve, reject) => {
-            canvas.toBlob(
-              (b) => (b ? resolve(b) : reject(new Error('Failed to capture camera frame.'))),
-              'image/jpeg',
-              0.96
-            );
-          });
+          bestCtx.drawImage(workCanvas, 0, 0, vw, vh);
         }
+
+        // Stop early after 2 frames once already crisp-sharp to minimize shutter lag
+        if (i >= 1 && isSharp) break;
       }
+
+      bestBlob = await new Promise<Blob>((resolve, reject) => {
+        bestCanvas.toBlob(
+          (b) => (b ? resolve(b) : reject(new Error('Failed to capture camera frame.'))),
+          'image/jpeg',
+          0.97
+        );
+      });
     } finally {
       probeCanvas.width = 0;
       probeCanvas.height = 0;
-      canvas.width = 0;
-      canvas.height = 0;
+      workCanvas.width = 0;
+      workCanvas.height = 0;
+      bestCanvas.width = 0;
+      bestCanvas.height = 0;
     }
 
     if (!bestBlob) throw new Error('Failed to capture camera frame.');
-    return { blob: bestBlob, fallbackQuad, suggestedAspectMode };
+    return { blob: bestBlob, previewQuad, fallbackQuad, suggestedAspectMode };
+  };
+
+  const startImmediateBatchSave = (capture: CameraCaptureResult) => {
+    const seq = ++batchThumbSeqRef.current;
+    setBatchCount((c) => c + 1);
+    setBatchPendingCount((c) => c + 1);
+
+    const quickUrl = URL.createObjectURL(capture.blob);
+    setLastThumbUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return quickUrl;
+    });
+
+    void onBatchCapture(capture)
+      .then((saved) => {
+        if (!mountedRef.current) return;
+        const thumb = saved && 'thumbnailBlob' in saved ? saved.thumbnailBlob : undefined;
+        if (thumb && batchThumbSeqRef.current === seq) {
+          const croppedUrl = URL.createObjectURL(thumb);
+          setLastThumbUrl((prev) => {
+            if (prev) URL.revokeObjectURL(prev);
+            return croppedUrl;
+          });
+        }
+      })
+      .catch(() => {
+        if (mountedRef.current) {
+          setBatchCount((c) => Math.max(0, c - 1));
+        }
+      })
+      .finally(() => {
+        if (mountedRef.current) {
+          setBatchPendingCount((c) => Math.max(0, c - 1));
+        }
+      });
   };
 
   const handleShutter = async () => {
-    if (!cameraReady || capturing) return;
+    if (!cameraReady || capturing || finishingBatch) return;
     setCapturing(true);
     setShutterFlash(true);
     window.setTimeout(() => setShutterFlash(false), 140);
@@ -582,12 +832,10 @@ export function CameraView({
         stopStream();
         onSingleCapture(result);
       } else {
-        setBatchCaptures((prev) => [...prev, result]);
-        const url = URL.createObjectURL(result.blob);
-        setLastThumbUrl((prev) => {
-          if (prev) URL.revokeObjectURL(prev);
-          return url;
-        });
+        // Clear previous page's quad lock so next page acquires its own lock cleanly
+        liveQuadRef.current = null;
+        setLiveQuad(null);
+        startImmediateBatchSave(result);
       }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Capture failed.');
@@ -605,18 +853,15 @@ export function CameraView({
       stopStream();
       onSingleCapture({ blob: file });
     } else {
-      const url = URL.createObjectURL(file);
-      setBatchCaptures((prev) => [...prev, { blob: file }]);
-      setLastThumbUrl((prev) => {
-        if (prev) URL.revokeObjectURL(prev);
-        return url;
-      });
+      startImmediateBatchSave({ blob: file });
     }
   };
 
-  const handleFinishBatch = () => {
+  const handleFinishBatch = async () => {
+    if (finishingBatch) return;
+    setFinishingBatch(true);
     stopStream();
-    onBatchComplete(batchCaptures);
+    await onBatchComplete(batchCount);
   };
 
   const handleClose = () => {
@@ -712,8 +957,28 @@ export function CameraView({
           </button>
         </div>
 
-        {/* Utility Controls: Torch + Flip */}
+        {/* Utility Controls: Fast Shutter + Torch + Flip */}
         <div className="flex items-center gap-1.5">
+          {shutterPrioritySupported && (
+            <button
+              type="button"
+              onClick={() => void toggleFastShutter()}
+              title={
+                fastShutterOn
+                  ? 'Fast shutter priority active (reduces motion blur on small text)'
+                  : 'Switch to fast shutter priority'
+              }
+              aria-label={fastShutterOn ? 'Fast shutter priority on' : 'Fast shutter priority off'}
+              className={`h-10 px-2.5 flex items-center gap-1 border font-mono text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer ${
+                fastShutterOn
+                  ? 'bg-[#2eb846] text-zinc-950 border-[#2eb846]'
+                  : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-500'
+              }`}
+            >
+              <Gauge size={13} />
+              <span>{shutterSpeedLabel ?? 'Fast'}</span>
+            </button>
+          )}
           {torchSupported && (
             <button
               type="button"
@@ -887,12 +1152,20 @@ export function CameraView({
                       ? 'TAP TO FOCUS'
                       : 'HOLD STEADY'}
                   </span>
+                  {shutterSpeedLabel && (
+                    <>
+                      <span className="text-zinc-600">·</span>
+                      <span className="text-zinc-300">{shutterSpeedLabel}</span>
+                    </>
+                  )}
                   <span className="text-zinc-600">·</span>
                   <span className={liveQuad ? 'text-[#2eb846] font-bold' : 'text-zinc-400'}>
                     {liveQuad
                       ? 'DOC_LOCKED'
                       : mode === 'batch'
-                      ? `BATCH · ${batchCaptures.length}`
+                      ? batchPendingCount > 0
+                        ? `BATCH · ${batchCount} (SAVING)`
+                        : `BATCH · ${batchCount}`
                       : `ALIGN ${activeGuidePreset.label.toUpperCase()}`}
                   </span>
                 </div>
@@ -971,16 +1244,30 @@ export function CameraView({
         <div className="mx-auto max-w-md flex items-center justify-between gap-4">
           {/* Left slot: Batch counter OR Gallery import */}
           <div className="w-28 flex items-center justify-start gap-3">
-            {batchCaptures.length > 0 && lastThumbUrl ? (
+            {batchCount > 0 && lastThumbUrl ? (
               <div className="relative flex items-center gap-2">
-                <img
-                  src={lastThumbUrl}
-                  alt="Last captured page"
-                  className="h-12 w-9 object-cover border border-white/60 bg-zinc-900"
-                />
-                <span className="font-mono text-xs font-bold text-white">
-                  ×{batchCaptures.length}
-                </span>
+                <div className="relative">
+                  <img
+                    src={lastThumbUrl}
+                    alt="Last captured page"
+                    className={`h-12 w-9 object-cover border bg-zinc-900 ${
+                      batchPendingCount > 0 ? 'border-amber-400/80' : 'border-[#2eb846]'
+                    }`}
+                  />
+                  <span
+                    className={`absolute -top-1 -right-1 w-2 h-2 ${
+                      batchPendingCount > 0 ? 'bg-amber-400 animate-pulse' : 'bg-[#2eb846]'
+                    }`}
+                  />
+                </div>
+                <div className="flex flex-col leading-tight">
+                  <span className="font-mono text-xs font-bold text-white">
+                    ×{batchCount}
+                  </span>
+                  <span className="font-mono text-[8px] uppercase tracking-wider text-zinc-400">
+                    {batchPendingCount > 0 ? 'Cropping...' : 'Saved'}
+                  </span>
+                </div>
               </div>
             ) : (
               <button
@@ -1001,7 +1288,7 @@ export function CameraView({
           <button
             type="button"
             onClick={handleShutter}
-            disabled={!cameraReady || capturing || Boolean(errorMsg)}
+            disabled={!cameraReady || capturing || finishingBatch || Boolean(errorMsg)}
             aria-label="Capture document photo"
             className="relative h-16 w-16 rounded-full border-[3px] border-white p-1 flex items-center justify-center active:scale-95 transition-transform disabled:opacity-35 cursor-pointer"
           >
@@ -1012,14 +1299,15 @@ export function CameraView({
 
           {/* Right slot: Done button (Batch) OR Native OS Camera escape hatch */}
           <div className="w-28 flex items-center justify-end">
-            {batchCaptures.length > 0 ? (
+            {batchCount > 0 ? (
               <button
                 type="button"
-                onClick={handleFinishBatch}
-                className="h-11 px-3.5 bg-white text-zinc-950 font-mono text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5 hover:bg-zinc-200 transition-colors cursor-pointer"
+                onClick={() => void handleFinishBatch()}
+                disabled={finishingBatch}
+                className="h-11 px-3.5 bg-white text-zinc-950 font-mono text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5 hover:bg-zinc-200 transition-colors disabled:opacity-60 cursor-pointer"
               >
                 <Check size={15} strokeWidth={3} />
-                Done ({batchCaptures.length})
+                {finishingBatch ? 'Saving...' : `Done (${batchCount})`}
               </button>
             ) : (
               <button

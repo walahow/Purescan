@@ -153,11 +153,22 @@ export function computeA4GuideQuad(
   return computeDocumentGuideQuad(frameWidth, frameHeight, 'a4', 'auto', fillRatio);
 }
 
+/** Returns maximum Euclidean normalized corner distance between two quads. */
+export function maxCornerDistance(a: Quad, b: Quad): number {
+  let maxDist = 0;
+  for (let i = 0; i < 4; i++) {
+    const d = Math.hypot(a[i].x - b[i].x, a[i].y - b[i].y);
+    if (d > maxDist) maxDist = d;
+  }
+  return maxDist;
+}
+
 /**
  * Exponentially smooths quad corner motion for jitter-free live viewfinder overlays.
+ * Snaps immediately when corners shift sharply (e.g., turning to a new batch page).
  */
 export function smoothQuad(prev: Quad | null, next: Quad, alpha = 0.35): Quad {
-  if (!prev) {
+  if (!prev || maxCornerDistance(prev, next) > 0.12) {
     return next.map((p) => ({ ...p })) as Quad;
   }
   const a = Math.max(0.05, Math.min(1, alpha));
@@ -1769,4 +1780,47 @@ export function detectDocumentQuad(
     confidence: bestScore,
     detected: true,
   };
+}
+
+/**
+ * Resolves the final document crop quad for a captured frame. When the live viewfinder
+ * had an active locked preview quad, still-frame refinement may nudge corners up to
+ * 4.5% for shutter-lag alignment; any larger drift or missed detection preserves the
+ * preview quad so the saved crop matches what the user saw on screen.
+ */
+export function resolveCapturedQuad(
+  pixels: Uint8ClampedArray,
+  width: number,
+  height: number,
+  options?: {
+    previewQuad?: Quad;
+    fallbackQuad?: Quad;
+    workingMaxDim?: number;
+  }
+): DocumentDetectionResult {
+  const previewQuad = options?.previewQuad;
+  const fallbackQuad = options?.fallbackQuad;
+  const workingMaxDim = options?.workingMaxDim ?? 400;
+
+  if (previewQuad) {
+    const det = detectDocumentQuad(pixels, width, height, {
+      fallbackQuad: previewQuad,
+      hintQuad: previewQuad,
+      workingMaxDim,
+    });
+    if (det.detected && maxCornerDistance(det.quad, previewQuad) <= 0.045) {
+      return det;
+    }
+    return {
+      quad: previewQuad.map((p) => ({ ...p })) as Quad,
+      confidence: Math.max(0.5, det.confidence),
+      detected: true,
+    };
+  }
+
+  return detectDocumentQuad(pixels, width, height, {
+    fallbackQuad,
+    hintQuad: fallbackQuad,
+    workingMaxDim,
+  });
 }

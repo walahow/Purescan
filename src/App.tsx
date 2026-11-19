@@ -35,6 +35,8 @@ export default function App() {
     thumbUrls,
     prepareSingleDraft,
     commitDraft,
+    enqueueBatchCapture,
+    awaitPendingBatchCaptures,
     addBatchBlobs,
     deletePage,
     movePage,
@@ -137,6 +139,7 @@ export default function App() {
     try {
       const draft = await prepareSingleDraft(capture.blob, {
         fromCamera: true,
+        previewQuad: capture.previewQuad,
         fallbackQuad: capture.fallbackQuad,
         suggestedAspectMode: capture.suggestedAspectMode,
       });
@@ -148,24 +151,19 @@ export default function App() {
     }
   };
 
-  const handleBatchCameraComplete = async (captures: CameraCaptureResult[]) => {
-    setScreen('workspace');
-    if (captures.length === 0) return;
+  const handleBatchCameraCapture = async (capture: CameraCaptureResult) => {
     try {
-      if (captures.length === 1) {
-        const draft = await prepareSingleDraft(captures[0].blob, {
-          fromCamera: true,
-          fallbackQuad: captures[0].fallbackQuad,
-          suggestedAspectMode: captures[0].suggestedAspectMode,
-        });
-        setActiveDraft(draft);
-        setScreen('crop');
-      } else {
-        await addBatchBlobs(captures, 'pure-color');
-      }
+      const saved = await enqueueBatchCapture(capture, 'pure-color');
+      return { thumbnailBlob: saved.thumbnailBlob };
     } catch (err) {
-      notify('error', err instanceof Error ? err.message : 'Failed to process captured batch.');
+      notify('error', err instanceof Error ? err.message : 'Failed to crop captured page.');
+      throw err;
     }
+  };
+
+  const handleBatchCameraComplete = async () => {
+    await awaitPendingBatchCaptures();
+    setScreen('workspace');
   };
 
   const handleCropConfirm = (result: { quad: Quad; aspectMode: AspectMode; rotation: Rotation }) => {
@@ -319,12 +317,15 @@ export default function App() {
       {screen === 'camera' && (
         <CameraView
           onSingleCapture={(capture) => void handleSingleCameraCapture(capture)}
-          onBatchComplete={(captures) => void handleBatchCameraComplete(captures)}
+          onBatchCapture={handleBatchCameraCapture}
+          onBatchComplete={() => handleBatchCameraComplete()}
           onFallbackGallery={() => {
             setScreen('workspace');
             window.setTimeout(() => galleryInputRef.current?.click(), 50);
           }}
-          onClose={() => setScreen('workspace')}
+          onClose={() => {
+            void handleBatchCameraComplete();
+          }}
         />
       )}
 

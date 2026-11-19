@@ -3,6 +3,8 @@ import {
   computeA4GuideQuad,
   computeDocumentGuideQuad,
   detectDocumentQuad,
+  resolveCapturedQuad,
+  smoothQuad,
 } from '../documentDetector';
 import {
   A4_RATIO,
@@ -491,5 +493,90 @@ describe('documentDetector', () => {
     const res = detectDocumentQuad(pixels, w, h, { workingMaxDim: 400 });
     expect(res.detected).toBe(true);
     expect(maxCornerError(res.quad, expected)).toBeLessThan(0.04);
+  });
+
+  it('resolveCapturedQuad preserves locked previewQuad when still detection misses or drifts far', () => {
+    const w = 240;
+    const h = 320;
+    const blank = new Uint8ClampedArray(w * h * 4).fill(210);
+    for (let i = 3; i < blank.length; i += 4) blank[i] = 255;
+
+    const previewQuad: Quad = [
+      { x: 0.12, y: 0.14 },
+      { x: 0.88, y: 0.13 },
+      { x: 0.90, y: 0.88 },
+      { x: 0.10, y: 0.86 },
+    ];
+    const resolvedMiss = resolveCapturedQuad(blank, w, h, {
+      previewQuad,
+      fallbackQuad: createDefaultQuad(0.05),
+    });
+    expect(resolvedMiss.detected).toBe(true);
+    expect(resolvedMiss.quad).toEqual(previewQuad);
+
+    // Drifted still detection (>4.5% away) also preserves the previewQuad the user approved
+    const farDoc: Quad = [
+      { x: 0.30, y: 0.30 },
+      { x: 0.72, y: 0.30 },
+      { x: 0.72, y: 0.72 },
+      { x: 0.30, y: 0.72 },
+    ];
+    const farPixels = renderIndoorWhiteFloorScene({
+      w: 360,
+      h: 480,
+      docQuadNorm: farDoc,
+      floorRgb: [224, 222, 216],
+      paperRgb: [229, 230, 233],
+      seamStrength: 0.25,
+    });
+    const resolvedDrift = resolveCapturedQuad(farPixels, 360, 480, {
+      previewQuad,
+      workingMaxDim: 400,
+    });
+    expect(resolvedDrift.quad).toEqual(previewQuad);
+  });
+
+  it('resolveCapturedQuad tracks small still-frame motion around previewQuad and smoothQuad snaps on page turns', () => {
+    const w = 360;
+    const h = 480;
+    const actualDoc: Quad = [
+      { x: 0.14, y: 0.12 },
+      { x: 0.86, y: 0.13 },
+      { x: 0.88, y: 0.87 },
+      { x: 0.13, y: 0.86 },
+    ];
+    const slightPreviewShift: Quad = actualDoc.map((p) => ({
+      x: p.x + 0.015,
+      y: p.y - 0.01,
+    })) as Quad;
+
+    const pixels = renderIndoorWhiteFloorScene({
+      w,
+      h,
+      docQuadNorm: actualDoc,
+      floorRgb: [224, 222, 216],
+      paperRgb: [229, 230, 233],
+      seamStrength: 0.26,
+      innerTable: true,
+    });
+    const res = resolveCapturedQuad(pixels, w, h, {
+      previewQuad: slightPreviewShift,
+      workingMaxDim: 400,
+    });
+    expect(res.detected).toBe(true);
+    expect(maxCornerError(res.quad, actualDoc)).toBeLessThan(0.03);
+
+    // smoothQuad interpolates small jitter, but snaps on sharp page shifts (> 12%)
+    const smallNext = actualDoc.map((p) => ({ x: p.x + 0.02, y: p.y })) as Quad;
+    const smoothed = smoothQuad(actualDoc, smallNext, 0.5);
+    expect(smoothed[0].x).toBeCloseTo(actualDoc[0].x + 0.01, 4);
+
+    const jumpedNext: Quad = [
+      { x: 0.35, y: 0.25 },
+      { x: 0.80, y: 0.25 },
+      { x: 0.80, y: 0.75 },
+      { x: 0.35, y: 0.75 },
+    ];
+    expect(smoothQuad(actualDoc, jumpedNext, 0.5)).toEqual(jumpedNext);
   });
 });

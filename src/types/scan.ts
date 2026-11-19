@@ -204,6 +204,8 @@ export interface DetectDocumentOptions {
 
 export interface CameraCaptureResult {
   blob: Blob;
+  /** Live auto-detected quad shown in the camera preview at shutter time */
+  previewQuad?: Quad;
   fallbackQuad?: Quad;
   suggestedAspectMode?: AspectMode;
 }
